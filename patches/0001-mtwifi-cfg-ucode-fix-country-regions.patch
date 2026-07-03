@@ -1,5 +1,5 @@
 diff --git a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
-index 0a0c611f38..7d979f54d0 100644
+index 0a0c611f38..31abb2e22e 100644
 --- a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
 +++ b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
 @@ -102,31 +102,32 @@
@@ -32,33 +32,33 @@ index 0a0c611f38..7d979f54d0 100644
 -        "UA": [ 1, 0 ], "US": [ 0, 0 ], "UY": [ 1, 5 ], "UZ": [ 0, 1 ],
 -        "VE": [ 1, 5 ], "VN": [ 1, 0 ], "YE": [ 1, 0 ], "ZA": [ 1, 1 ],
 -        "ZW": [ 1, 0 ]
-+        "00": [ 1, 13, "NA" ], "DB": [ 5, 13, "FCC" ], "AE": [ 1, 13, "NA" ], "AL": [ 1, 13, "NA" ],
-+        "AR": [ 1, 13, "FCC" ], "AT": [ 1, 13, "CE" ], "AM": [ 1, 2, "CE" ], "AU": [ 1, 14, "FCC" ],
-+        "AZ": [ 1, 2, "CE" ], "BE": [ 1, 13, "CE" ], "BH": [ 1, 0, "NA" ], "BY": [ 1, 1, "NA" ],
-+        "BO": [ 1, 3, "FCC" ], "BR": [ 1, 13, "FCC" ], "BN": [ 1, 0, "FCC" ], "BG": [ 1, 13, "CE" ],
-+        "BZ": [ 1, 4, "FCC" ], "CA": [ 0, 14, "FCC" ], "CH": [ 1, 13, "CE" ], "CL": [ 1, 0, "FCC" ],
-+        "CN": [ 1, 0, "NA" ], "CO": [ 1, 13, "FCC" ], "CR": [ 1, 13, "NA" ], "CY": [ 1, 13, "CE" ],
-+        "CZ": [ 1, 13, "CE" ], "DE": [ 1, 13, "CE" ], "DK": [ 1, 13, "CE" ], "DO": [ 1, 0, "FCC" ],
-+        "DZ": [ 1, 1, "NA" ], "EC": [ 1, 13, "NA" ], "EG": [ 1, 2, "NA" ], "EE": [ 1, 13, "CE" ],
-+        "ES": [ 1, 13, "CE" ], "FI": [ 1, 13, "CE" ], "FR": [ 1, 13, "CE" ], "GE": [ 1, 2, "CE" ],
-+        "GB": [ 1, 13, "CE" ], "GR": [ 1, 13, "CE" ], "GT": [ 1, 0, "FCC" ], "HN": [ 1, 13, "FCC" ],
-+        "HK": [ 1, 7, "NA" ], "HU": [ 1, 13, "CE" ], "HR": [ 1, 13, "CE" ], "IS": [ 1, 13, "CE" ],
-+        "IN": [ 1, 13, "NA" ], "ID": [ 1, 0, "FCC" ], "IR": [ 1, 4, "NA" ], "IE": [ 1, 13, "CE" ],
-+        "IL": [ 6, 13, "NA" ], "IT": [ 1, 13, "CE" ], "JP": [ 1, 1, "JAP" ], "JO": [ 1, 10, "NA" ],
-+        "KP": [ 1, 7, "NA" ], "KR": [ 1, 13, "FCC" ], "KW": [ 1, 2, "NA" ], "KZ": [ 1, 13, "NA" ],
-+        "LB": [ 1, 13, "NA" ], "LI": [ 1, 13, "CE" ], "LT": [ 1, 13, "CE" ], "LU": [ 1, 13, "CE" ],
-+        "LV": [ 1, 13, "CE" ], "MA": [ 1, 2, "NA" ], "MC": [ 1, 13, "CE" ], "MO": [ 1, 13, "NA" ],
-+        "MK": [ 1, 13, "NA" ], "MX": [ 1, 13, "FCC" ], "MY": [ 1, 7, "NA" ], "NL": [ 1, 13, "CE" ],
-+        "NO": [ 1, 13, "CE" ], "NZ": [ 1, 13, "FCC" ], "OM": [ 1, 1, "NA" ], "PA": [ 1, 13, "FCC" ],
-+        "PE": [ 1, 13, "FCC" ], "PH": [ 1, 13, "FCC" ], "PL": [ 1, 13, "CE" ], "PK": [ 1, 13, "NA" ],
-+        "PT": [ 1, 13, "CE" ], "PR": [ 1, 13, "FCC" ], "QA": [ 1, 13, "NA" ], "RO": [ 1, 13, "CE" ],
-+        "RU": [ 1, 14, "NA" ], "SA": [ 1, 1, "NA" ], "SG": [ 1, 13, "NA" ], "SK": [ 1, 13, "CE" ],
-+        "SI": [ 1, 13, "CE" ], "SV": [ 1, 0, "FCC" ], "SE": [ 1, 13, "CE" ], "SY": [ 1, 13, "NA" ],
-+        "TH": [ 1, 13, "NA" ], "TN": [ 1, 2, "NA" ], "TR": [ 1, 1, "CE" ], "TT": [ 1, 13, "FCC" ],
-+        "TW": [ 0, 13, "FCC" ], "UA": [ 1, 13, "CE" ], "US": [ 0, 13, "FCC" ], "UY": [ 1, 0, "FCC" ],
-+        "UZ": [ 1, 2, "NA" ], "VE": [ 1, 0, "FCC" ], "VN": [ 1, 13, "NA" ], "YE": [ 1, 13, "NA" ],
++        "00": [ 1, 13, "FCC" ], "DB": [ 5, 7, "FCC" ], "AE": [ 1, 0, "FCC" ], "AL": [ 1, 0, "CE" ],
++        "AR": [ 1, 3, "FCC" ], "AT": [ 1, 1, "CE" ], "AM": [ 1, 2, "CE" ], "AU": [ 1, 0, "CE" ],
++        "AZ": [ 1, 2, "CE" ], "BE": [ 1, 1, "CE" ], "BH": [ 1, 0, "CE" ], "BY": [ 1, 0, "CE" ],
++        "BO": [ 1, 4, "JAP" ], "BR": [ 1, 1, "FCC" ], "BN": [ 1, 4, "FCC" ], "BG": [ 1, 1, "CE" ],
++        "BZ": [ 1, 4, "JAP" ], "CA": [ 0, 0, "FCC" ], "CH": [ 1, 1, "CE" ], "CL": [ 1, 0, "JAP" ],
++        "CN": [ 1, 4, "FCC" ], "CO": [ 0, 0, "FCC" ], "CR": [ 1, 0, "FCC" ], "CY": [ 1, 1, "CE" ],
++        "CZ": [ 1, 2, "CE" ], "DE": [ 1, 1, "CE" ], "DK": [ 1, 1, "CE" ], "DO": [ 0, 0, "FCC" ],
++        "DZ": [ 1, 0, "JAP" ], "EC": [ 1, 0, "FCC" ], "EG": [ 1, 2, "CE" ], "EE": [ 1, 1, "CE" ],
++        "ES": [ 1, 1, "CE" ], "FI": [ 1, 1, "CE" ], "FR": [ 1, 2, "CE" ], "GE": [ 1, 2, "CE" ],
++        "GB": [ 1, 1, "CE" ], "GR": [ 1, 1, "CE" ], "GT": [ 0, 0, "FCC" ], "HN": [ 1, 0, "FCC" ],
++        "HK": [ 1, 0, "CE" ], "HU": [ 1, 1, "CE" ], "HR": [ 1, 2, "CE" ], "IS": [ 1, 1, "CE" ],
++        "IN": [ 1, 0, "FCC" ], "ID": [ 1, 4, "FCC" ], "IR": [ 1, 4, "CE" ], "IE": [ 1, 1, "CE" ],
++        "IL": [ 1, 0, "CE" ], "IT": [ 1, 1, "CE" ], "JP": [ 1, 9, "JAP" ], "JO": [ 1, 0, "CE" ],
++        "KP": [ 1, 5, "JAP" ], "KR": [ 1, 5, "JAP" ], "KW": [ 1, 0, "CE" ], "KZ": [ 1, 0, "CE" ],
++        "LB": [ 1, 0, "FCC" ], "LI": [ 1, 1, "CE" ], "LT": [ 1, 1, "CE" ], "LU": [ 1, 1, "CE" ],
++        "LV": [ 1, 1, "CE" ], "MA": [ 1, 0, "CE" ], "MC": [ 1, 2, "CE" ], "MO": [ 1, 0, "FCC" ],
++        "MK": [ 1, 0, "CE" ], "MX": [ 0, 0, "FCC" ], "MY": [ 1, 0, "FCC" ], "NL": [ 1, 1, "CE" ],
++        "NO": [ 0, 0, "CE" ], "NZ": [ 1, 0, "CE" ], "OM": [ 1, 0, "CE" ], "PA": [ 0, 0, "FCC" ],
++        "PE": [ 1, 4, "FCC" ], "PH": [ 1, 4, "FCC" ], "PL": [ 1, 1, "CE" ], "PK": [ 1, 0, "FCC" ],
++        "PT": [ 1, 1, "CE" ], "PR": [ 0, 0, "FCC" ], "QA": [ 1, 0, "CE" ], "RO": [ 1, 0, "CE" ],
++        "RU": [ 1, 0, "FCC" ], "SA": [ 1, 0, "CE" ], "SG": [ 1, 0, "FCC" ], "SK": [ 1, 1, "CE" ],
++        "SI": [ 1, 1, "CE" ], "SV": [ 1, 0, "FCC" ], "SE": [ 1, 1, "CE" ], "SY": [ 1, 0, "CE" ],
++        "TH": [ 1, 0, "FCC" ], "TN": [ 1, 2, "CE" ], "TR": [ 1, 2, "CE" ], "TT": [ 1, 2, "FCC" ],
++        "TW": [ 0, 3, "FCC" ], "UA": [ 1, 0, "CE" ], "US": [ 0, 0, "FCC" ], "UY": [ 1, 5, "FCC" ],
++        "UZ": [ 0, 1, "CE" ], "VE": [ 1, 5, "FCC" ], "VN": [ 1, 0, "FCC" ], "YE": [ 1, 0, "FCC" ],
 +        "ZA": [ 1, 1, "CE" ],
-+        "ZW": [ 1, 0, "NA" ]
++        "ZW": [ 1, 0, "CE" ]
      }
 -}
 \ No newline at end of file

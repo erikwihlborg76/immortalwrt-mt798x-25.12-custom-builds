@@ -1,22 +1,16 @@
 diff --git a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/ucode/mtwifi/converter.uc b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/ucode/mtwifi/converter.uc
-index 022b2b6941..de8fd20f8d 100644
+index 022b2b6941..a9c7d8a799 100644
 --- a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/ucode/mtwifi/converter.uc
 +++ b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/ucode/mtwifi/converter.uc
-@@ -134,6 +134,7 @@ export function convert(uci_cfg) {
- 	let wmode_int = calc_wireless_mode(conf.band, conf.htmode);
- 	dat.WirelessMode = wmode_int;
- 	let is_ax = (wmode_int >= 16); // for TWT checking, etc.
-+	let regions = (conf.country && length(conf.country) == 2) ? (defs.COUNTRY_REGIONS[conf.country] || [1, 0, "NA"]) : null;
- 
- 	// Channel, check auto or not
- 	if (conf.channel == "auto") {
-@@ -144,10 +145,33 @@ export function convert(uci_cfg) {
+@@ -144,10 +144,35 @@ export function convert(uci_cfg) {
  		dat.Channel = conf.channel;
  	}
  
++	let regions = (conf.country && length(conf.country) == 2) ? (defs.COUNTRY_REGIONS[conf.country] || [1, 13, "FCC"]) : null;
++
 +	if (conf.band == "5g" && regions && regions[1] != null) {
 +		let rd = regions[2];
-+		if (rd && rd != "NA") {
++		if (rd == "CE" || rd == "FCC" || rd == "JAP") {
 +			dat.RDRegion = rd;
 +			dat.IEEE80211H = "1";
 +			dat.DfsEnable = "1";
@@ -46,7 +40,7 @@ index 022b2b6941..de8fd20f8d 100644
  		if (conf.band == "2g") {
  			dat.CountryRegion = regions[0];
  		} else {
-@@ -377,4 +401,4 @@ export function convert(uci_cfg) {
+@@ -377,4 +402,4 @@ export function convert(uci_cfg) {
  	}
  
  	return dat;
