@@ -1,43 +1,161 @@
-# Custom ImmortalWrt Builds for MT798x
+# Custom ImmortalWrt builds for MT798x — 25.12
 
-Custom firmware based on
-[chasey-dev/immortalwrt-mt798x-rebase](https://github.com/chasey-dev/immortalwrt-mt798x-rebase)
-(`25.12-linkup`), built as a preconfigured dumb access point.
+Custom firmware for the Zyxel EX5601-T0 (ubootmod) and GL.iNet GL-MT3000,
+built in router and preconfigured dumb access point variants.
 
-## Supported Devices
+## Upstream source
 
-- Zyxel EX5601-T0 (ubootmod)
-- GL.iNet GL-MT3000 / Beryl AX
+- Source: [chasey-dev/immortalwrt-mt798x-rebase](https://github.com/chasey-dev/immortalwrt-mt798x-rebase).
+- Branch: `25.12`.
+- MediaTek Wi-Fi configuration: `mtwifi-cfg-ucode`.
 
-## Local Features
+The workflow follows this branch rather than pinning an upstream commit.
+Each release records the source URL and branch; `version.buildinfo` records
+the built revision.
 
-- Corrected MediaTek country/region mappings.
-- 5 GHz DFS, 802.11h, and dedicated zero-wait DFS support.
-- English-focused package selection with MediaTek Wi-Fi/LuCI tools and useful
-  diagnostics, without the bundled VPN/proxy extras.
+## Local features
 
-## AP Overlay
+- Corrected MediaTek country/region mappings and dedicated zero-wait DFS configuration.
+- MediaTek Wi-Fi/LuCI tools and diagnostics.
+- Restored Zyxel EX5601 LAN/WAN board mapping missing from the upstream source.
+- SQM support with LuCI and CAKE.
 
-[`files/etc/uci-defaults/99-ap-mode`](files/etc/uci-defaults/99-ap-mode)
-applies these settings on first boot:
+See [`defconfig/`](defconfig) for package, driver, and device-specific firmware
+selections, and [`patches/`](patches) for local source changes.
 
-- Static LAN address `10.0.0.9/24`, with gateway and DNS server `10.0.0.1`.
-- DHCPv4, DHCPv6, router advertisements, NDP, and LAN IPv6 prefix assignment
-  disabled.
-- Timezone set to `Europe/Stockholm`.
-- Wi-Fi country set to Sweden (`SE`).
-- 2.4 GHz set to channel 6 with `HE40`; 5 GHz set to `HE80`.
-- AP interfaces secured with WPA2-PSK using the initial key `password123`.
-- Configuration failures logged and reported with a nonzero exit status.
+## Devices and images
 
-> **Required:** Reboot the device once after its first boot. This is necessary
-> for DNS resolution on the device itself to work correctly.
+| Device | Profile | Sysupgrade image suffix |
+| --- | --- | --- |
+| Zyxel EX5601-T0 with OpenWrt U-Boot layout | `zyxel_ex5601-t0-ubootmod` | `-squashfs-sysupgrade.itb` |
+| GL.iNet GL-MT3000 / Beryl AX | `glinet_gl-mt3000` | `-squashfs-sysupgrade.bin` |
 
-After rebooting, manage the device at `http://10.0.0.9/`. Change the default
-Wi-Fi key immediately.
+Each device is built as both `ap` and `router`: **four artifacts per workflow
+run**. Artifact names are `firmware-<profile>-<variant>-<YYYYMMDD>`. Successful
+runs also create a draft GitHub Release containing one ZIP per artifact.
 
-## Installation
+Each ZIP contains the device's sysupgrade image, `build.log`, and available
+metadata: `sha256sums`, `profiles.json`, `config.buildinfo`, and
+`version.buildinfo`. The checksum list can also reference upstream outputs
+omitted from these minimal archives.
 
-Download the matching draft GitHub Release, extract it, and flash the
-`*squashfs-sysupgrade.itb` image from an existing OpenWrt/ImmortalWrt
-ubootmod installation.
+## AP and router defaults
+
+The workflow installs [`uci-defaults/ap`](uci-defaults/ap) or
+[`uci-defaults/router`](uci-defaults/router) as `/etc/uci-defaults/99-custom`.
+The firmware applies it during first boot, after upstream configuration
+creation and before normal network service startup.
+
+| Setting | AP | Router |
+| --- | --- | --- |
+| LAN / management address | `10.0.0.9/24` | `10.0.0.1/24` |
+| Gateway and DNS override on LAN | `10.0.0.1` | Removed; WAN supplies upstream connectivity |
+| DHCPv4 on LAN | Disabled | `10.0.0.100`–`10.0.0.249`, 12-hour leases |
+| Physical WAN port | Added to the LAN bridge | Removed from the LAN bridge; used for WAN |
+| WAN and WAN6 interfaces | Disabled; definitions retained | AP disable flags removed; saved protocols retained |
+| LAN IPv6 prefix assignment | Disabled; local ULA removed | `/60` assignment; ULA restored if missing |
+| IPv6 router advertisements / SLAAC | Disabled | Enabled |
+| DHCPv6 server on LAN | Disabled | Disabled; clients use SLAAC |
+
+On a clean installation the upstream WAN defaults use DHCP, with DHCPv6 on
+WAN6. Existing WAN settings, such as PPPoE credentials, are retained. Global
+IPv6 connectivity on the router depends on the upstream connection providing
+IPv6 and a suitable delegated prefix.
+
+The AP is a bridge behind an existing router, which must provide DHCP and
+routing. Disabling its own IPv6 assignment and advertisements does not block
+bridged IPv6 traffic or remove IPv6 link-local addresses. Any Ethernet port can
+serve as the AP uplink with the default port layout.
+
+Both scripts expect the generated LAN bridge and a separate physical WAN
+device. Review custom VLAN/bridge layouts before flashing. Missing topology,
+missing Wi-Fi sections, or failed required UCI writes cause the script to fail;
+OpenWrt retains a failed defaults script for retry on the next boot. Logs use
+the `99-custom` tag.
+
+**Defaults are reapplied after each flash, including upgrades that preserve
+settings.** The selected script resets the listed role, radio, and Wi-Fi
+security settings. In particular, it resets AP Wi-Fi keys to `password123`.
+Change that key after flashing, or customize the defaults before building.
+
+Only the `10.0.0.0/24` defaults are currently produced. For another network,
+edit the relevant LAN address, gateway, DNS, and DHCP values in the first-boot
+scripts before building; there is no second-subnet build variant yet. Reserve
+`10.0.0.9` on the upstream network when deploying an AP.
+
+## Wireless and DFS
+
+Both roles set the timezone to `Europe/Stockholm`, the Wi-Fi country to `SE`,
+and existing AP interfaces to WPA2-PSK with the initial key `password123`.
+
+| Band | Channel | Width |
+| --- | --- | --- |
+| 2.4 GHz | Automatic | `HE40` |
+| 5 GHz | Automatic | `HE80` |
+
+Automatic selection is local to each radio; separate APs do not coordinate
+channel assignments or continuously rebalance them.
+
+The patches enable 802.11h/DFS and MediaTek's dedicated zero-wait DFS flow for
+supported regulatory domains, including Sweden. The driver can serve clients
+on an available non-DFS channel while a dedicated detector performs the radar
+Channel Availability Check (CAC) for a DFS channel. After successful CAC it
+can switch to the cleared channel, with a possible brief interruption.
+
+Radar detection still requires rejecting or leaving the affected channel.
+Zero-wait does not bypass CAC or guarantee a DFS channel will be selected;
+actual behavior depends on the device, driver, and regulatory conditions.
+
+## SQM
+
+SQM packages are included in **both AP and router images**. Keeping them in
+[`defconfig/mt798x_baseline.config`](defconfig/mt798x_baseline.config) avoids
+variant-specific package scripts and keeps normal package management intact.
+
+The baseline selects `luci-app-sqm`, `sqm-scripts`, `tc-full`,
+`kmod-sched-cake`, `kmod-ifb`, and `kmod-sched-core`. The build system resolves
+the remaining dependencies. `tc-full` supplies the complete traffic-control
+utility.
+
+On a clean installation SQM queues are disabled until configured. Installing
+the packages alone does not enable shaping. Preserved SQM settings can remain
+active across upgrades, so review them when changing a device's role.
+
+To use SQM on the router:
+
+1. Open **Network → SQM QoS** in LuCI.
+2. Select the actual WAN network device, not the LAN bridge. With the default
+   Ethernet WAN layout this is `eth1` on the Zyxel and `eth0` on the GL-MT3000;
+   PPPoE or VLAN configurations can use a different device.
+3. Set download/upload rates for the connection, choose `cake` and
+   `piece_of_cake.qos`, and configure link-layer overhead for the WAN type.
+4. Disable hardware NAT/flow acceleration, including MediaTek HNAT in
+   TurboACC. Hardware acceleration bypasses SQM's CPU traffic shaping. Avoid
+   running another QoS/shaper on the same interface at the same time.
+5. Enable the queue, save/apply, and measure latency under load. SQM uses the
+   CPU, so available throughput depends on the device and chosen settings.
+
+Normally leave SQM disabled on a bridged AP and shape the internet connection
+on its upstream router. See the [OpenWrt SQM guide](https://openwrt.org/docs/guide-user/network/traffic-shaping/sqm)
+for rate selection, link-layer settings, and verification.
+
+## Building and installation
+
+The [GitHub Actions workflow](.github/workflows/immortalwrt-matrix.yml) runs on
+pushes to `main` and tags matching `v*`. It discovers device configs, merges the
+shared baseline with each device config, applies local patches, installs the
+selected first-boot script, and compiles a complete firmware for each role.
+The workflow checks first-boot script syntax and rejects a generated config
+that drops the requested device or required SQM packages. It currently uses
+full source builds, rather than Image Builder.
+
+Download the ZIP for the correct device and role from the draft release,
+then extract it and flash the matching sysupgrade image from an
+existing compatible OpenWrt/ImmortalWrt installation. The Zyxel image requires
+the **ubootmod/OpenWrt U-Boot partition layout**; this is not a stock-firmware
+conversion guide. The GL-MT3000 uses the `.bin` image shown above.
+
+After boot, use `http://10.0.0.9/` for AP mode or `http://10.0.0.1/` for router
+mode, and change the initial Wi-Fi key. Configuration and source checks cannot
+replace a firmware build and an on-device test of networking, wireless, and
+SQM performance.

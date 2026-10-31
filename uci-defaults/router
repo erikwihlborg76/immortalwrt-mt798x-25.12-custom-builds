@@ -1,0 +1,147 @@
+#!/bin/sh
+
+# Applied on first boot of every flashed image. Keep this file as plain UCI
+# commands so it can also be pasted into the Firmware Selector's first-boot
+# script field. Required writes explicitly exit on failure: boot sources this
+# script in a conditional, where set -e alone does not reliably stop errors.
+set -e
+
+find_device_section() {
+	target="$1"
+	index=0
+
+	while name="$(uci -q get "network.@device[$index].name")"; do
+		if [ "$name" = "$target" ]; then
+			printf '@device[%s]\n' "$index"
+			return 0
+		fi
+		index=$((index + 1))
+	done
+
+	return 1
+}
+
+# Both supported boards generate a LAN bridge and a separate physical WAN.
+# Refuse an incompatible saved topology instead of silently skipping ports.
+wan_device="$(uci -q get network.wan.device || true)"
+lan_device="$(uci -q get network.lan.device || true)"
+lan_bridge_section="$(find_device_section "$lan_device" || true)"
+if [ -z "$wan_device" ] || [ -z "$lan_device" ] || [ -z "$lan_bridge_section" ] || \
+   [ "$(uci -q get "network.$lan_bridge_section.type" || true)" != 'bridge' ]; then
+	logger -t 99-custom 'Expected a LAN bridge and a physical WAN device; defaults were not applied'
+	exit 1
+fi
+
+for option in \
+	network.lan.gateway \
+	network.lan.dns \
+	network.lan.ipaddr \
+	network.lan.netmask \
+	network.lan.ip6addr \
+	network.lan.ip6assign \
+	network.lan.ip6class \
+	network.lan.ip6gw \
+	network.lan.ip6hint \
+	network.lan.ip6ifaceid \
+	network.lan.ip6prefix \
+	network.lan.delegate \
+	dhcp.lan.ra \
+	dhcp.lan.ra_slaac \
+	dhcp.lan.max_preferred_lifetime \
+	dhcp.lan.max_valid_lifetime \
+	dhcp.lan.dhcpv6 \
+	dhcp.lan.ndp \
+	dhcp.lan.ra_flags \
+	dhcp.lan.dynamicdhcp
+do
+	uci -q delete "$option" || true
+done
+
+if uci -q get network.wan >/dev/null; then
+	uci -q delete network.wan.disabled || true
+	uci -q delete network.wan.ipv6 || true
+fi
+
+if uci -q get network.wan6 >/dev/null; then
+	uci -q delete network.wan6.disabled || true
+fi
+
+# Undo AP mode's WAN-to-LAN bridge membership before bringing WAN back up.
+if [ -n "$wan_device" ] && [ -n "$lan_bridge_section" ]; then
+	uci -q del_list "network.$lan_bridge_section.ports=$wan_device" || true
+fi
+
+# Older router/AP defaults removed the generated ULA. Restore the same random
+# /48 format used by ImmortalWrt's 12_network-generate-ula first-boot script.
+if [ -e /proc/sys/net/ipv6 ]; then
+	ula_prefix="$(uci -q get network.globals.ula_prefix || true)"
+	if [ -z "$ula_prefix" ] || [ "$ula_prefix" = 'auto' ]; then
+		uci set network.globals='globals' || exit 1
+		ula_prefix="$(hexdump -vn 5 -e '"fd" 1/1 "%02x:" 2/2 "%x:"' /dev/urandom)" || exit 1
+		uci set network.globals.ula_prefix="$ula_prefix:/48" || exit 1
+	fi
+fi
+
+uci set network.lan.proto='static' || exit 1
+uci add_list network.lan.ipaddr='10.0.0.1/24' || exit 1
+uci set network.lan.ip6assign='60' || exit 1
+
+uci set dhcp.lan='dhcp' || exit 1
+uci set dhcp.lan.interface='lan' || exit 1
+uci set dhcp.lan.ignore='0' || exit 1
+uci set dhcp.lan.start='100' || exit 1
+uci set dhcp.lan.limit='150' || exit 1
+uci set dhcp.lan.leasetime='12h' || exit 1
+uci set dhcp.lan.dhcpv4='server' || exit 1
+uci set dhcp.lan.dhcpv6='disabled' || exit 1
+uci set dhcp.lan.ra='server' || exit 1
+uci set dhcp.lan.ra_slaac='1' || exit 1
+uci set dhcp.lan.max_preferred_lifetime='2700' || exit 1
+uci set dhcp.lan.max_valid_lifetime='5400' || exit 1
+
+uci set system.@system[0].zonename='Europe/Stockholm' || exit 1
+uci set system.@system[0].timezone='CET-1CEST,M3.5.0,M10.5.0/3' || exit 1
+
+uci commit network || exit 1
+uci commit dhcp || exit 1
+uci commit system || exit 1
+
+radio=0
+while band="$(uci -q get "wireless.@wifi-device[$radio].band")"; do
+	uci set "wireless.@wifi-device[$radio].country=SE" || exit 1
+
+	case "$band" in
+		2g)
+			uci set "wireless.@wifi-device[$radio].channel=auto" || exit 1
+			uci set "wireless.@wifi-device[$radio].htmode=HE40" || exit 1
+			;;
+		5g)
+			uci set "wireless.@wifi-device[$radio].channel=auto" || exit 1
+			uci set "wireless.@wifi-device[$radio].htmode=HE80" || exit 1
+			;;
+	esac
+
+	radio=$((radio + 1))
+done
+if [ "$radio" -eq 0 ]; then
+	logger -t 99-custom 'No Wi-Fi radio found; retry defaults on the next boot'
+	exit 1
+fi
+
+iface=0
+ap_count=0
+while mode="$(uci -q get "wireless.@wifi-iface[$iface].mode")"; do
+	if [ "$mode" = 'ap' ]; then
+		uci set "wireless.@wifi-iface[$iface].encryption=psk2" || exit 1
+		uci set "wireless.@wifi-iface[$iface].key=password123" || exit 1
+		ap_count=$((ap_count + 1))
+	fi
+
+	iface=$((iface + 1))
+done
+if [ "$ap_count" -eq 0 ]; then
+	logger -t 99-custom 'No Wi-Fi AP interface found; retry defaults on the next boot'
+	exit 1
+fi
+
+uci commit wireless || exit 1

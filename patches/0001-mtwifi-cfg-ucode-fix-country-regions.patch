@@ -1,5 +1,4 @@
 diff --git a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
-index 0a0c611f38..31abb2e22e 100644
 --- a/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
 +++ b/package/mtk/applications/mtwifi-cfg-ucode/files/usr/share/schema/mtwifi/dat-defs.json
 @@ -102,31 +102,32 @@
@@ -14,7 +13,7 @@ index 0a0c611f38..31abb2e22e 100644
 -        "CO": [ 0, 0 ], "CR": [ 1, 0 ], "CY": [ 1, 1 ], "CZ": [ 1, 2 ],
 -        "DE": [ 1, 1 ], "DK": [ 1, 1 ], "DO": [ 0, 0 ], "DZ": [ 1, 0 ],
 -        "EC": [ 1, 0 ], "EG": [ 1, 2 ], "EE": [ 1, 1 ], "ES": [ 1, 1 ],
--        "FI": [ 1, 1 ], "FR": [ 1, 2 ], "GE": [ 1, 2 ], "GB": [ 1, 1 ],
+-        "FI": [ 1, 1 ], "FR": [ 1, 1 ], "GE": [ 1, 2 ], "GB": [ 1, 1 ],
 -        "GR": [ 1, 1 ], "GT": [ 0, 0 ], "HN": [ 1, 0 ], "HK": [ 1, 0 ],
 -        "HU": [ 1, 1 ], "HR": [ 1, 2 ], "IS": [ 1, 1 ], "IN": [ 1, 0 ],
 -        "ID": [ 1, 4 ], "IR": [ 1, 4 ], "IE": [ 1, 1 ], "IL": [ 1, 0 ],
@@ -40,7 +39,7 @@ index 0a0c611f38..31abb2e22e 100644
 +        "CN": [ 1, 4, "FCC" ], "CO": [ 0, 0, "FCC" ], "CR": [ 1, 0, "FCC" ], "CY": [ 1, 1, "CE" ],
 +        "CZ": [ 1, 2, "CE" ], "DE": [ 1, 1, "CE" ], "DK": [ 1, 1, "CE" ], "DO": [ 0, 0, "FCC" ],
 +        "DZ": [ 1, 0, "JAP" ], "EC": [ 1, 0, "FCC" ], "EG": [ 1, 2, "CE" ], "EE": [ 1, 1, "CE" ],
-+        "ES": [ 1, 1, "CE" ], "FI": [ 1, 1, "CE" ], "FR": [ 1, 2, "CE" ], "GE": [ 1, 2, "CE" ],
++        "ES": [ 1, 1, "CE" ], "FI": [ 1, 1, "CE" ], "FR": [ 1, 1, "CE" ], "GE": [ 1, 2, "CE" ],
 +        "GB": [ 1, 1, "CE" ], "GR": [ 1, 1, "CE" ], "GT": [ 0, 0, "FCC" ], "HN": [ 1, 0, "FCC" ],
 +        "HK": [ 1, 0, "CE" ], "HU": [ 1, 1, "CE" ], "HR": [ 1, 2, "CE" ], "IS": [ 1, 1, "CE" ],
 +        "IN": [ 1, 0, "FCC" ], "ID": [ 1, 4, "FCC" ], "IR": [ 1, 4, "CE" ], "IE": [ 1, 1, "CE" ],
@@ -60,6 +59,4 @@ index 0a0c611f38..31abb2e22e 100644
 +        "ZA": [ 1, 1, "CE" ],
 +        "ZW": [ 1, 0, "CE" ]
      }
--}
-\ No newline at end of file
-+}
+ }

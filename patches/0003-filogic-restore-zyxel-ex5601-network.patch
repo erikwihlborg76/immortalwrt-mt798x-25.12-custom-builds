@@ -1,0 +1,14 @@
+diff --git a/target/linux/mediatek/filogic/base-files/etc/board.d/02_network b/target/linux/mediatek/filogic/base-files/etc/board.d/02_network
+--- a/target/linux/mediatek/filogic/base-files/etc/board.d/02_network
++++ b/target/linux/mediatek/filogic/base-files/etc/board.d/02_network
+@@ -46,7 +46,9 @@ mediatek_setup_interfaces()
+ 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 game" eth1
+ 		;;
+ 	acer,predator-w6x-stock|\
+-	acer,predator-w6x-ubootmod)
++	acer,predator-w6x-ubootmod|\
++	zyxel,ex5601-t0-stock|\
++	zyxel,ex5601-t0-ubootmod)
+ 		ucidef_set_interfaces_lan_wan "lan1 lan2 lan3 lan4" eth1
+ 		;;
+ 	acer,vero-w6m)
