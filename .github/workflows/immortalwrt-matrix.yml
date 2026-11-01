@@ -70,11 +70,16 @@ jobs:
           echo " - ap"
           echo " - router"
 
-          json=$(printf "{ \"profile\": [ %s ], \"variant\": [ \"ap\", \"router\" ] }" "$(IFS=,; echo "${configs[*]}")")
+          echo "LAN prefixes (/24):"
+          echo " - 10.0.0"
+          echo " - 192.168.1"
+
+          json=$(printf "{ \"profile\": [ %s ], \"variant\": [ \"ap\", \"router\" ], \"lan_prefix\": [ \"10.0.0\", \"192.168.1\" ] }" "$(IFS=,; echo "${configs[*]}")")
           echo "Generated matrix JSON: $json"
           echo "matrix=$json" >> "$GITHUB_OUTPUT"
 
   build:
+    name: ${{ matrix.profile }} / ${{ matrix.variant }}-${{ matrix.lan_prefix }}.${{ matrix.variant == 'ap' && '9' || '1' }}
     needs: discover-configs
     runs-on: ubuntu-22.04
 
@@ -91,6 +96,8 @@ jobs:
       OWRT_SUBTARGET: "filogic"
       PROFILE: "${{ matrix.profile }}"
       IMAGE_VARIANT: "${{ matrix.variant }}"
+      LAN_PREFIX: "${{ matrix.lan_prefix }}"
+      LAN_IP: "${{ matrix.lan_prefix }}.${{ matrix.variant == 'ap' && '9' || '1' }}"
 
       WORKDIR: "${{ github.workspace }}/openwrt"
 
@@ -231,13 +238,25 @@ jobs:
             echo "Unsupported image variant: ${IMAGE_VARIANT}"
             exit 1
           fi
+          case "${LAN_PREFIX}" in
+            10.0.0|192.168.1) ;;
+            *)
+              echo "Unsupported LAN prefix: ${LAN_PREFIX}"
+              exit 1
+              ;;
+          esac
           sh -n "${DEFAULTS}"
 
           # This is the same mechanism used by OpenWrt's ImageBuilder/ASU:
           # place one user-supplied script in the rootfs overlay.
+          # Bake in the selected prefix so no build environment is needed at boot.
+          RENDERED_DEFAULTS="${WORKDIR}/files/etc/uci-defaults/99-custom"
           install -D -m 0644 \
             "${DEFAULTS}" \
-            "${WORKDIR}/files/etc/uci-defaults/99-custom"
+            "${RENDERED_DEFAULTS}"
+          sed -i "s/^lan_prefix=.*/lan_prefix='${LAN_PREFIX}'/" "${RENDERED_DEFAULTS}"
+          grep -Fxq "lan_prefix='${LAN_PREFIX}'" "${RENDERED_DEFAULTS}"
+          sh -n "${RENDERED_DEFAULTS}"
 
       # ---------------- CONFIG -----------------------
 
@@ -361,7 +380,7 @@ jobs:
       - name: Upload minimal firmware artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-${{ env.PROFILE }}-${{ env.IMAGE_VARIANT }}-${{ env.BUILD_DATE }}
+          name: firmware-${{ env.PROFILE }}-${{ env.IMAGE_VARIANT }}-${{ env.LAN_IP }}-${{ env.BUILD_DATE }}
           path: minimal-artifacts/
           if-no-files-found: error
 
@@ -397,6 +416,17 @@ jobs:
           - Commit: ${GITHUB_SHA}
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           - Upstream source: ${REPO_URL}@${BRANCH}
+
+          Each device has four variants (all /24 networks):
+
+          | Variant | LAN / management address | AP gateway and DNS |
+          | --- | --- | --- |
+          | ap-10.0.0.9 | 10.0.0.9 | 10.0.0.1 |
+          | ap-192.168.1.9 | 192.168.1.9 | 192.168.1.1 |
+          | router-10.0.0.1 | 10.0.0.1 | WAN supplies upstream connectivity |
+          | router-192.168.1.1 | 192.168.1.1 | WAN supplies upstream connectivity |
+
+          Defaults are reapplied even when preserving settings during sysupgrade.
           EOF
 
       - name: Download firmware artifacts

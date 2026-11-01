@@ -6,6 +6,9 @@
 # script in a conditional, where set -e alone does not reliably stop errors.
 set -e
 
+# Standalone default; the workflow sets this for the selected /24 network.
+lan_prefix='10.0.0'
+
 find_device_section() {
 	target="$1"
 	index=0
@@ -83,7 +86,7 @@ if [ -e /proc/sys/net/ipv6 ]; then
 fi
 
 uci set network.lan.proto='static' || exit 1
-uci add_list network.lan.ipaddr='10.0.0.1/24' || exit 1
+uci add_list "network.lan.ipaddr=${lan_prefix}.1/24" || exit 1
 uci set network.lan.ip6assign='60' || exit 1
 
 uci set dhcp.lan='dhcp' || exit 1

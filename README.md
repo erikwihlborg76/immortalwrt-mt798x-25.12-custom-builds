@@ -30,9 +30,12 @@ selections, and [`patches/`](patches) for local source changes.
 | Zyxel EX5601-T0 with OpenWrt U-Boot layout | `zyxel_ex5601-t0-ubootmod` | `-squashfs-sysupgrade.itb` |
 | GL.iNet GL-MT3000 / Beryl AX | `glinet_gl-mt3000` | `-squashfs-sysupgrade.bin` |
 
-Each device is built as both `ap` and `router`: **four artifacts per workflow
-run**. Artifact names are `firmware-<profile>-<variant>-<YYYYMMDD>`. Successful
-runs also create a draft GitHub Release containing one ZIP per artifact.
+Each device is built as both `ap` and `router` on two LAN subnets: **eight
+artifacts per workflow run**. The four variants per device are `ap-10.0.0.9`,
+`ap-192.168.1.9`, `router-10.0.0.1`, and `router-192.168.1.1`.
+Artifact names are `firmware-<profile>-<role>-<LAN-IP>-<YYYYMMDD>`. Successful
+runs also create a draft GitHub Release containing one ZIP per artifact, for
+example `firmware-glinet_gl-mt3000-ap-192.168.1.9-20261101.zip`.
 
 Each ZIP contains the device's sysupgrade image, `build.log`, and available
 metadata: `sha256sums`, `profiles.json`, `config.buildinfo`, and
@@ -41,16 +44,25 @@ omitted from these minimal archives.
 
 ## AP and router defaults
 
-The workflow installs [`uci-defaults/ap`](uci-defaults/ap) or
-[`uci-defaults/router`](uci-defaults/router) as `/etc/uci-defaults/99-custom`.
+The workflow selects [`uci-defaults/ap`](uci-defaults/ap) or
+[`uci-defaults/router`](uci-defaults/router), sets its `lan_prefix` for the
+selected subnet, and installs it as `/etc/uci-defaults/99-custom`.
 The firmware applies it during first boot, after upstream configuration
 creation and before normal network service startup.
 
+| Variant | LAN / management address | AP gateway and DNS | Router DHCPv4 range |
+| --- | --- | --- | --- |
+| `ap-10.0.0.9` | `10.0.0.9/24` | `10.0.0.1` | — |
+| `ap-192.168.1.9` | `192.168.1.9/24` | `192.168.1.1` | — |
+| `router-10.0.0.1` | `10.0.0.1/24` | — | `10.0.0.100`–`10.0.0.249` |
+| `router-192.168.1.1` | `192.168.1.1/24` | — | `192.168.1.100`–`192.168.1.249` |
+
+Both subnets use the same role settings:
+
 | Setting | AP | Router |
 | --- | --- | --- |
-| LAN / management address | `10.0.0.9/24` | `10.0.0.1/24` |
-| Gateway and DNS override on LAN | `10.0.0.1` | Removed; WAN supplies upstream connectivity |
-| DHCPv4 on LAN | Disabled | `10.0.0.100`–`10.0.0.249`, 12-hour leases |
+| Gateway and DNS override on LAN | Selected subnet's `.1` address | Removed; WAN supplies upstream connectivity |
+| DHCPv4 on LAN | Disabled | `.100`–`.249` in the selected subnet, 12-hour leases |
 | Physical WAN port | Added to the LAN bridge | Removed from the LAN bridge; used for WAN |
 | WAN and WAN6 interfaces | Disabled; definitions retained | AP disable flags removed; saved protocols retained |
 | LAN IPv6 prefix assignment | Disabled; local ULA removed | `/60` assignment; ULA restored if missing |
@@ -78,10 +90,9 @@ settings.** The selected script resets the listed role, radio, and Wi-Fi
 security settings. In particular, it resets AP Wi-Fi keys to `password123`.
 Change that key after flashing, or customize the defaults before building.
 
-Only the `10.0.0.0/24` defaults are currently produced. For another network,
-edit the relevant LAN address, gateway, DNS, and DHCP values in the first-boot
-scripts before building; there is no second-subnet build variant yet. Reserve
-`10.0.0.9` on the upstream network when deploying an AP.
+Choose the AP variant matching the upstream LAN and reserve its `.9` address
+on that network. The scripts default to `10.0.0.0/24` when used directly outside
+the workflow; edit the single `lan_prefix` assignment to change that subnet.
 
 ## Wireless and DFS
 
@@ -144,18 +155,20 @@ for rate selection, link-layer settings, and verification.
 The [GitHub Actions workflow](.github/workflows/immortalwrt-matrix.yml) runs on
 pushes to `main` and tags matching `v*`. It discovers device configs, merges the
 shared baseline with each device config, applies local patches, installs the
-selected first-boot script, and compiles a complete firmware for each role.
+selected first-boot script, and compiles a complete firmware for each role and
+subnet combination.
 The workflow checks first-boot script syntax and rejects a generated config
 that drops the requested device or required SQM packages. It currently uses
 full source builds, rather than Image Builder.
 
-Download the ZIP for the correct device and role from the draft release,
+Download the ZIP for the correct device, role, and subnet from the draft release,
 then extract it and flash the matching sysupgrade image from an
 existing compatible OpenWrt/ImmortalWrt installation. The Zyxel image requires
 the **ubootmod/OpenWrt U-Boot partition layout**; this is not a stock-firmware
 conversion guide. The GL-MT3000 uses the `.bin` image shown above.
 
-After boot, use `http://10.0.0.9/` for AP mode or `http://10.0.0.1/` for router
-mode, and change the initial Wi-Fi key. Configuration and source checks cannot
-replace a firmware build and an on-device test of networking, wireless, and
-SQM performance.
+After boot, use `http://10.0.0.9/` or `http://192.168.1.9/` for AP mode, or
+`http://10.0.0.1/` or `http://192.168.1.1/` for router mode, according to the
+selected variant, and change the initial Wi-Fi key. Configuration and source
+checks cannot replace a firmware build and an on-device test of networking,
+wireless, and SQM performance.
