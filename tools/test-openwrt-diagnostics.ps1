@@ -54,6 +54,7 @@ Assert-True ($json.findings.Count -eq 4) 'Machine-readable report is missing fin
 $unknownKeyError = 'No ED25519 host key is known for 10.0.0.9 and you have requested strict checking.' + "`nHost key verification failed."
 $unknownKeyError | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
 Assert-True ((Get-SshSetupHint $testRoot).Contains('StrictHostKeyChecking=ask')) 'Unknown host keys need interactive setup guidance.'
+Assert-True (-not (Get-SshSetupHint $testRoot 'disabled').Contains('StrictHostKeyChecking=ask')) 'Skip mode must not advise enrolling a key as if strict checking were enabled.'
 $null = Write-DiagnosticReport $testRoot $metadata
 Assert-True ((Get-Content -LiteralPath (Join-Path $testRoot 'findings.md') -Raw).Contains('StrictHostKeyChecking=ask')) 'Host-key setup guidance is missing from the report.'
 'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! Host key verification failed.' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
@@ -93,10 +94,15 @@ foreach ($arg in @('-NoProfile', '-NonInteractive', '-File', $fakeSsh)) { $start
 $transportRoot = Join-Path $testRoot 'transport'
 [System.IO.Directory]::CreateDirectory($transportRoot) | Out-Null
 $transport = Invoke-SshCapture $startInfo 'read-only fixture' $transportRoot 10
+Assert-True (@($transport).Count -eq 1) 'Async stream completion objects must not leak into the transport result.'
 Assert-True ($transport.exit_code -eq 255 -and -not $transport.timed_out) 'SSH failure status was lost.'
 Assert-True ((Get-Content -LiteralPath (Join-Path $transportRoot 'ssh-stderr.log') -Raw).Contains('test stderr')) 'SSH stderr was lost.'
 $transportSections = @(Read-DiagnosticCapture $transportRoot $token)
 Assert-True (($transportSections | Where-Object name -eq 'logread').status -eq 'captured') 'Failed SSH lost already captured logs.'
+$partialMetadata = @{ transport = $transport; sections = $transportSections }
+Assert-True ((Get-DiagnosticCaptureState $transportRoot $partialMetadata) -eq 'partial') 'SSH failure after retrieving logs should allow partial analysis.'
+$null = Write-DiagnosticReport $transportRoot $partialMetadata
+Assert-True (Test-Path -LiteralPath (Join-Path $transportRoot 'findings.md')) 'Useful partial logs must still produce a report.'
 @'
 $null = [Console]::In.ReadToEnd()
 [Console]::Out.WriteLine('partial output before timeout')
@@ -129,4 +135,46 @@ foreach ($section in $metadata.sections) { $section.status = 'captured'; $sectio
 $metadata | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $testRoot 'collection.json')
 & $pwsh -NoProfile -File $collector -AnalyzePath $testRoot
 Assert-True ($LASTEXITCODE -eq 0) 'Findings must not make a complete snapshot fail.'
+
+# Exercise the full collection CLI with a local executable that rejects SSH arguments.
+# No router is contacted; this must produce failure details instead of empty findings.
+$cliRoot = Join-Path $testRoot 'cli-failure'
+[System.IO.Directory]::CreateDirectory($cliRoot) | Out-Null
+$destination = 'root@fixture-' + [guid]::NewGuid().ToString('N') + '.invalid'
+$cliInfo = [System.Diagnostics.ProcessStartInfo]::new()
+$cliInfo.FileName = $pwsh
+$cliInfo.UseShellExecute = $false
+$cliInfo.RedirectStandardInput = $true
+$cliInfo.RedirectStandardOutput = $true
+$cliInfo.RedirectStandardError = $true
+foreach ($argument in @('-NoProfile', '-NonInteractive', '-File', $collector, '-Target', $destination, '-SkipHostKeyChecking', '-SshExecutable', $pwsh)) { $cliInfo.ArgumentList.Add($argument) }
+$cliResult = Invoke-SshCapture $cliInfo '' $cliRoot 15
+Assert-True ($cliResult.exit_code -eq 2) 'Failed connections must exit with code 2.'
+$cliOut = [System.IO.File]::ReadAllText((Join-Path $cliRoot 'ssh-output.log'))
+$cliErr = [System.IO.File]::ReadAllText((Join-Path $cliRoot 'ssh-stderr.log'))
+Assert-True ($cliOut -notmatch '(?m)^(?:Capture|Partial capture|Findings):') 'Failed connections must not announce a capture or findings.'
+Assert-True ($cliErr.Contains('remote diagnostics never started') -and $cliErr.Contains('No findings were generated')) 'Failed connections need an explicit error.'
+$failedDir = Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '../logs/openwrt') -Directory | Where-Object { $_.Name.Contains($destination.Replace('@', '_')) } | Select-Object -First 1
+Assert-True ($null -ne $failedDir) 'Failure troubleshooting details were not retained.'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findings.md'))) 'Failed connections must not create Markdown findings.'
+Assert-True (-not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findings.json'))) 'Failed connections must not create JSON findings.'
+$failedMetadata = Get-Content -LiteralPath (Join-Path $failedDir.FullName 'collection.json') -Raw | ConvertFrom-Json
+Assert-True ($failedMetadata.status -eq 'not-started' -and $failedMetadata.transport -isnot [array]) 'Failed collection status or transport schema is incorrect.'
+Assert-True ($failedMetadata.ssh_arguments -contains 'StrictHostKeyChecking=no') 'The CLI skip switch did not reach the actual SSH invocation.'
+Assert-True ($failedMetadata.ssh_client -eq $pwsh) 'The selected SSH client was not recorded.'
+& $pwsh -NoProfile -File $collector -AnalyzePath $failedDir.FullName
+Assert-True ($LASTEXITCODE -eq 2 -and -not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findings.md'))) 'Reanalysis must also reject captures without logs.'
+
+# Compatibility with already-saved failure results containing leaked completion objects.
+$failedMetadata.transport = @([pscustomobject]@{}, [pscustomobject]@{}, $failedMetadata.transport)
+Assert-True ((Get-DiagnosticCaptureState $failedDir.FullName $failedMetadata) -eq 'not-started') 'Legacy failed captures must be recognized.'
+Assert-True ($failedMetadata.transport -isnot [array]) 'Legacy transport results must be normalized.'
+
+# Starting remote commands without retrieving either log buffer is not analysis success.
+$noLogsMetadata = @{ transport = @{ exit_code = 0; timed_out = $false; error = $null }; sections = @(
+    @{ name = 'logread'; status = 'command-failed'; exit_code = 127 },
+    @{ name = 'dmesg'; status = 'not-captured'; exit_code = $null },
+    @{ name = 'board'; status = 'captured'; exit_code = 0 }
+) }
+Assert-True ((Get-DiagnosticCaptureState $failedDir.FullName $noLogsMetadata) -eq 'no-logs') 'Missing log buffers must prevent analysis.'
 Write-Host "All diagnostic tests passed. Ignored fixtures: $([System.IO.Path]::GetFullPath($testRoot))"

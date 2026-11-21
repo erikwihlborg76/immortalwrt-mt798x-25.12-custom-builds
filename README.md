@@ -148,7 +148,7 @@ Use `-Port 2222` for a different SSH port, `-IdentityFile ~/.ssh/id_ed25519` for
 
 The tooling runs fixed read-only commands in one SSH session. It retrieves `logread`, `dmesg`, board and firmware details, uptime, IP addresses and routes, interface counters, memory and filesystem usage, traffic-shaping queue statistics, and the presence of the custom defaults script. It does not export UCI configuration or Wi-Fi keys. Individual command failures and SSH failures are recorded, partial logs are retained, and the report identifies incomplete collection.
 
-Each run creates a timestamped directory under `logs/openwrt/`, containing individual section logs, the raw SSH output and stderr, `collection.json`, and findings in `findings.md` and `findings.json`. The entire `logs/` directory is Git-ignored, including all downloaded data, generated findings, and test fixtures. Logs can contain private addresses, MAC addresses, hostnames, or other sensitive messages; review them before sharing.
+Each attempt saves troubleshooting details in a timestamped directory under `logs/openwrt/`: raw SSH output and stderr plus `collection.json`, including the selected SSH client, arguments, transport result, and collection status. If remote diagnostics never start or neither system nor kernel logs can be retrieved, the script prints the failure and SSH error, exits with code `2`, and generates no findings. Successful or useful partial captures also contain individual section logs and findings in `findings.md` and `findings.json`; partial captures are explicitly labeled. The entire `logs/` directory is Git-ignored, including all downloaded data, generated findings, and test fixtures. Logs can contain private addresses, MAC addresses, hostnames, or other sensitive messages; review them before sharing.
 
 The analyzer groups known kernel, memory, storage, watchdog, custom-defaults, Wi-Fi, DHCP, WAN, and DFS patterns, with source filenames and line numbers for up to five examples per group. DFS events are informational. Pattern matches are investigation leads rather than confirmed root causes; unmatched logs and a successful snapshot do not establish that the router is healthy. Counts refer to matching lines, and the same event can appear in both system and kernel logs. The other snapshots provide context for manual analysis.
 
@@ -158,7 +158,7 @@ Reanalyze a saved capture without connecting to the router, replacing `CAPTURE` 
 pwsh -File tools/openwrt-diagnostics.ps1 -AnalyzePath logs/openwrt/CAPTURE
 ```
 
-Reanalysis updates only the findings in that capture directory. Exit codes are `0` for a complete snapshot or reanalysis, `2` when collection was incomplete, and `1` for an invocation or local processing error. Findings themselves do not change the exit code. Run the local tests without a router using `pwsh -File tools/test-openwrt-diagnostics.ps1`.
+Reanalysis requires a usable captured system or kernel log and updates only the findings in that capture directory. Exit codes are `0` for a complete snapshot or reanalysis, `2` when collection failed or was incomplete, and `1` for an invocation or local processing error. Findings themselves do not change the exit code. Run the local tests without a router using `pwsh -File tools/test-openwrt-diagnostics.ps1`.
 
 ## Upstream source
 

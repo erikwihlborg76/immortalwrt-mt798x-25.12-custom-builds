@@ -70,7 +70,7 @@ run_section() {
 function New-SshStartInfo {
     param([string] $Executable, [string] $Destination, [int] $SshPort, [string] $KeyFile, [switch] $SkipHostKeyChecking)
     $info = [System.Diagnostics.ProcessStartInfo]::new()
-    $info.FileName = (Get-Command $Executable -CommandType Application -ErrorAction Stop).Source
+    $info.FileName = (Get-Command $Executable -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $info.UseShellExecute = $false
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
@@ -125,8 +125,8 @@ function Invoke-SshCapture {
             $process.WaitForExit()
         }
         try {
-            if ($copyOut) { $copyOut.GetAwaiter().GetResult() }
-            if ($copyErr) { $copyErr.GetAwaiter().GetResult() }
+            if ($copyOut) { $null = $copyOut.GetAwaiter().GetResult() }
+            if ($copyErr) { $null = $copyErr.GetAwaiter().GetResult() }
         } finally {
             $stdout.Dispose()
             $stderr.Dispose()
@@ -214,10 +214,13 @@ function Get-DiagnosticFindings([string] $SessionPath) {
     return @($groups.Values)
 }
 
-function Get-SshSetupHint([string] $SessionPath) {
+function Get-SshSetupHint([string] $SessionPath, [string] $HostKeyChecking) {
     $stderrPath = Join-Path $SessionPath 'ssh-stderr.log'
     if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { return }
     $stderr = [System.IO.File]::ReadAllText($stderrPath)
+    if ($HostKeyChecking -eq 'disabled' -and $stderr -match 'host key|host identification') {
+        return 'The destination was configured with host-key checking disabled. Inspect the selected SSH client and arguments in collection.json and any ProxyJump or ProxyCommand settings; a proxy connection can have separate host-key settings.'
+    }
     if ($stderr -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for [^\r\n]+ has changed') {
         return 'SSH reports a changed host key. Verify the new fingerprint independently before updating the saved key for this router. Collection will continue to reject the changed key until trust is resolved.'
     }
@@ -226,7 +229,26 @@ function Get-SshSetupHint([string] $SessionPath) {
     }
 }
 
+function Get-DiagnosticCaptureState([string] $SessionPath, $Metadata) {
+    # Older captures accidentally serialized async completion values alongside transport.
+    if ($Metadata.transport -is [array]) {
+        $Metadata.transport = @($Metadata.transport | Where-Object { $null -ne $_.timed_out } | Select-Object -Last 1)[0]
+    }
+    if (@($Metadata.sections | Where-Object status -ne 'not-captured').Count -eq 0) { return 'not-started' }
+    $usableLogs = @($Metadata.sections | Where-Object {
+        if ($_.name -notin @('logread', 'dmesg')) { return $false }
+        $path = Join-Path $SessionPath "$($_.name).log"
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+        return $_.status -eq 'captured' -or ($_.status -eq 'incomplete' -and -not [string]::IsNullOrWhiteSpace([System.IO.File]::ReadAllText($path)))
+    })
+    if (-not $usableLogs.Count) { return 'no-logs' }
+    if ($null -eq $Metadata.transport -or $Metadata.transport.exit_code -ne 0 -or $Metadata.transport.timed_out -or $Metadata.transport.error -or @($Metadata.sections | Where-Object status -ne 'captured').Count) { return 'partial' }
+    return 'complete'
+}
+
 function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
+    $state = Get-DiagnosticCaptureState $SessionPath $Metadata
+    if ($state -in @('not-started', 'no-logs')) { throw 'No diagnostic logs are available to analyze.' }
     $findings = @(Get-DiagnosticFindings $SessionPath)
     $report = [ordered]@{
         schema_version = 1
@@ -243,7 +265,7 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $lines.Add("SSH exit code: $($Metadata.transport.exit_code); timed out: $($Metadata.transport.timed_out).")
     if ($Metadata.host_key_checking) { $lines.Add("Host key checking: $($Metadata.host_key_checking).") }
     if ($Metadata.transport.error) { $lines.Add("Collection error: $($Metadata.transport.error)") }
-    $setupHint = Get-SshSetupHint $SessionPath
+    $setupHint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking
     if ($setupHint) {
         $lines.Add('')
         $lines.Add($setupHint)
@@ -254,7 +276,7 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     foreach ($section in $Metadata.sections) {
         $lines.Add("| $($section.name) | $($section.status) | $($section.exit_code) |")
     }
-    if ($Metadata.transport.exit_code -ne 0 -or $Metadata.transport.timed_out -or $Metadata.transport.error -or @($Metadata.sections | Where-Object status -ne 'captured').Count) {
+    if ($state -eq 'partial') {
         $lines.Add('')
         $lines.Add('**Collection is incomplete.** Check ssh-stderr.log and failed section logs. Missing commands or permissions can limit analysis; retained partial logs are still analyzed.')
     }
@@ -278,6 +300,33 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     }
     $lines | Set-Content -LiteralPath (Join-Path $SessionPath 'findings.md') -Encoding utf8
     return $findings.Count
+}
+
+function Complete-DiagnosticCapture([string] $SessionPath, $Metadata) {
+    $state = Get-DiagnosticCaptureState $SessionPath $Metadata
+    if ($state -in @('not-started', 'no-logs')) {
+        $message = if ($state -eq 'not-started') { 'Collection failed: remote diagnostics never started.' } else { 'Collection failed: no usable system or kernel logs were retrieved.' }
+        [Console]::Error.WriteLine("$message No findings were generated.")
+        if ($null -ne $Metadata.transport.exit_code) { [Console]::Error.WriteLine("SSH exit code: $($Metadata.transport.exit_code)") }
+        if ($Metadata.transport.timed_out) { [Console]::Error.WriteLine('SSH session timed out.') }
+        if ($Metadata.transport.error) { [Console]::Error.WriteLine($Metadata.transport.error) }
+        $stderrPath = Join-Path $SessionPath 'ssh-stderr.log'
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            foreach ($line in (Get-Content -LiteralPath $stderrPath -Tail 20)) { [Console]::Error.WriteLine($line) }
+        }
+        $hint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking
+        if ($hint) { [Console]::Error.WriteLine($hint) }
+        [Console]::Error.WriteLine("Failure details: $SessionPath")
+        return 2
+    }
+    $count = Write-DiagnosticReport $SessionPath $Metadata
+    Write-Host "$(if ($state -eq 'partial') { 'Partial capture' } else { 'Capture' }): $SessionPath"
+    Write-Host "Findings: $(Join-Path $SessionPath 'findings.md') ($count groups)"
+    if ($state -eq 'partial') {
+        [Console]::Error.WriteLine('Collection is incomplete; the findings cover only the retrieved logs. See collection.json and ssh-stderr.log.')
+        return 2
+    }
+    return 0
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
@@ -304,18 +353,15 @@ if ($MyInvocation.InvocationName -ne '.') {
                 schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o')
                 target = $Target; port = $Port
                 host_key_checking = if ($SkipHostKeyChecking) { 'disabled' } else { 'strict' }
+                ssh_client = $info.FileName; ssh_arguments = @($info.ArgumentList)
                 transport = Invoke-SshCapture -StartInfo $info -RemoteScript (New-RemoteScript $token) -SessionPath $session -Timeout $TimeoutSeconds
                 sections = @(Read-DiagnosticCapture -SessionPath $session -Token $token)
                 finished_at_utc = [DateTime]::UtcNow.ToString('o')
             }
+            $metadata['status'] = Get-DiagnosticCaptureState $session $metadata
             $metadata | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $session 'collection.json') -Encoding utf8
         }
-        $count = Write-DiagnosticReport -SessionPath $session -Metadata $metadata
-        Write-Host "Capture: $session"
-        Write-Host "Findings: $(Join-Path $session 'findings.md') ($count groups)"
-        $setupHint = Get-SshSetupHint $session
-        if ($setupHint) { [Console]::Error.WriteLine($setupHint) }
-        if ($metadata.transport.exit_code -ne 0 -or $metadata.transport.timed_out -or $metadata.transport.error -or @($metadata.sections | Where-Object status -ne 'captured').Count) { exit 2 }
+        exit (Complete-DiagnosticCapture -SessionPath $session -Metadata $metadata)
     } catch {
         [Console]::Error.WriteLine($_.Exception.Message)
         exit 1
