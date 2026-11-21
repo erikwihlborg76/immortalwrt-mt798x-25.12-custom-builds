@@ -120,7 +120,7 @@ The scripts log topology and missing-Wi-Fi errors with the `99-custom` tag; indi
 
 ## Collecting live diagnostics
 
-Use [`tools/openwrt-diagnostics.ps1`](tools/openwrt-diagnostics.ps1) from PowerShell 7 on Windows, Linux, or macOS with an OpenSSH client installed. Authenticate using an SSH key or agent. By default, verify the router's host key with an interactive SSH connection before collecting; the collector uses batch authentication and requires an already trusted host key. Use `root` to access the complete system and kernel logs.
+Use [`tools/openwrt-diagnostics.ps1`](tools/openwrt-diagnostics.ps1) from PowerShell 7 on Windows, Linux, or macOS with an OpenSSH client installed. Authenticate using an SSH key or agent by default, or use the password mode below. By default, verify the router's host key with an interactive SSH connection before collecting; the collector requires an already trusted host key. Use `root` to access the complete system and kernel logs.
 
 For a first connection to `10.0.0.9`, run:
 
@@ -136,9 +136,15 @@ To collect without strict host-key checking, use:
 pwsh -File tools/openwrt-diagnostics.ps1 -Target root@10.0.0.9 -SkipHostKeyChecking
 ```
 
-This explicitly sets `StrictHostKeyChecking=no` and directs `UserKnownHostsFile` to the platform null device (`NUL` on Windows, `/dev/null` on Linux/macOS), allowing collection without enrolling the router's key and without reading or updating your user host-key database. Using the null device avoids a host-verification failure reproduced with Windows OpenSSH 9.5 and `UserKnownHostsFile=none`. It skips verification of the router's identity against that database; SSH key or agent authentication is still required. The selected mode is recorded in the capture metadata and report. [OpenSSH option reference](https://man.openbsd.org/ssh_config#StrictHostKeyChecking).
+This explicitly sets `StrictHostKeyChecking=no` and directs `UserKnownHostsFile` to the platform null device (`NUL` on Windows, `/dev/null` on Linux/macOS), allowing collection without enrolling the router's key and without reading or updating your user host-key database. Using the null device avoids a host-verification failure reproduced with Windows OpenSSH 9.5 and `UserKnownHostsFile=none`. It skips verification of the router's identity against that database; login authentication is still required. The selected mode is recorded in the capture metadata and report. [OpenSSH option reference](https://man.openbsd.org/ssh_config#StrictHostKeyChecking).
 
-If the router reports `Permission denied (publickey,password)`, the connection reached login authentication but the available keys were rejected. Load an authorized key into your SSH agent or pass `-IdentityFile` with its private-key path. The collector runs in batch mode and does not prompt for a password, even when the server offers password authentication.
+If the router reports `Permission denied (publickey,password)` in the default mode, the connection reached login authentication but the available keys were rejected. Load an authorized key into your SSH agent, pass `-IdentityFile` with its private-key path, or use password mode:
+
+```powershell
+pwsh -File tools/openwrt-diagnostics.ps1 -Target root@10.0.0.9 -SkipHostKeyChecking -PasswordAuthentication
+```
+
+Run this directly in an interactive terminal and enter the router password at SSH's hidden prompt. Password mode selects password authentication instead of trying SSH keys. SSH reads the password directly from the terminal; the script does not receive it as an argument, environment variable, or captured input, and does not save it to diagnostic files. Password mode requires the server to allow password login and rejects redirected input or background jobs without a terminal. Time spent entering the password counts toward `-TimeoutSeconds`. Host-key checking remains enabled unless you also pass `-SkipHostKeyChecking`. The chosen authentication mode is recorded in the capture metadata and report.
 
 From the repository root, collect and analyze a snapshot:
 

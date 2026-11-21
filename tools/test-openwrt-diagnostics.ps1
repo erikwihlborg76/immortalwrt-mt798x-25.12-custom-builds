@@ -65,6 +65,8 @@ $authHint = Get-SshSetupHint $testRoot
 Assert-True ($authHint.Contains('login authentication failed') -and $authHint.Contains('-IdentityFile') -and -not $authHint.Contains('host key')) 'Authentication failures must get login-key guidance instead of host-key guidance.'
 'root@10.0.0.9: Permission denied (publickey,password).' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
 Assert-True ((Get-SshSetupHint $testRoot 'disabled').Contains('does not prompt for passwords')) 'Available password authentication must not be mistaken for an attempted password login.'
+$passwordHint = Get-SshSetupHint $testRoot 'disabled' 'password'
+Assert-True ($passwordHint.Contains('password authentication failed') -and -not $passwordHint.Contains('-IdentityFile')) 'Password-mode errors must explain password authentication.'
 
 # An interrupted SSH stream must retain its final partial section.
 $partialRoot = Join-Path $testRoot 'partial'
@@ -130,6 +132,11 @@ $expectedNullDevice = if ($IsWindows) { 'NUL' } else { '/dev/null' }
 Assert-True ($relaxedInfo.ArgumentList.Contains("UserKnownHostsFile=$expectedNullDevice")) 'Relaxed collection must use the platform null device for host keys.'
 Assert-True (-not $relaxedInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'The Windows OpenSSH host-verification regression must not be reintroduced.'
 Assert-True ($relaxedInfo.ArgumentList.Contains('BatchMode=yes')) 'Skipping host-key checks must not change login authentication.'
+$passwordInfo = New-SshStartInfo -Executable (Get-Process -Id $PID).Path -Destination 'root@10.0.0.9' -SshPort 22 -PasswordAuthentication
+Assert-True ($passwordInfo.ArgumentList.Contains('BatchMode=no') -and -not $passwordInfo.ArgumentList.Contains('BatchMode=yes')) 'Password mode must permit SSH prompts.'
+Assert-True ($passwordInfo.ArgumentList.Contains('PreferredAuthentications=password') -and $passwordInfo.ArgumentList.Contains('PasswordAuthentication=yes') -and $passwordInfo.ArgumentList.Contains('PubkeyAuthentication=no')) 'Password mode must select password login explicitly.'
+Assert-True (-not $passwordInfo.CreateNoWindow -and $passwordInfo.Environment['SSH_ASKPASS_REQUIRE'] -eq 'never') 'Password mode must use the attached terminal rather than an askpass helper.'
+Assert-True ($passwordInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'Password login must preserve the default host-key policy.'
 
 # Exercise both CLI reanalysis exit codes; findings do not make complete data fail.
 $pwsh = (Get-Process -Id $PID).Path
@@ -168,8 +175,16 @@ Assert-True ($failedMetadata.status -eq 'not-started' -and $failedMetadata.trans
 Assert-True ($failedMetadata.ssh_arguments -contains 'StrictHostKeyChecking=no') 'The CLI skip switch did not reach the actual SSH invocation.'
 Assert-True ($failedMetadata.ssh_arguments -contains "UserKnownHostsFile=$expectedNullDevice") 'The actual SSH invocation must use the platform null device.'
 Assert-True ($failedMetadata.ssh_client -eq $pwsh) 'The selected SSH client was not recorded.'
+Assert-True ($failedMetadata.authentication -eq 'key-or-agent') 'Capture metadata must record the authentication mode.'
 & $pwsh -NoProfile -File $collector -AnalyzePath $failedDir.FullName
 Assert-True ($LASTEXITCODE -eq 2 -and -not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findings.md'))) 'Reanalysis must also reject captures without logs.'
+
+# Password mode must fail clearly in jobs/pipelines, without reading a password
+# from stdin or treating the remote script as a credential.
+$cliInfo.ArgumentList.Add('-PasswordAuthentication')
+$cliResult = Invoke-SshCapture $cliInfo '' $cliRoot 15
+Assert-True ($cliResult.exit_code -eq 1) 'Password mode without a terminal must fail before collection.'
+Assert-True ([System.IO.File]::ReadAllText((Join-Path $cliRoot 'ssh-stderr.log')).Contains('requires an interactive terminal')) 'Missing-terminal errors must explain how to run password mode.'
 
 # Compatibility with already-saved failure results containing leaked completion objects.
 $failedMetadata.transport = @([pscustomobject]@{}, [pscustomobject]@{}, $failedMetadata.transport)

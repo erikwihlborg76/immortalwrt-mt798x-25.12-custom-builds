@@ -16,6 +16,9 @@ param(
     [switch] $SkipHostKeyChecking,
 
     [Parameter(ParameterSetName = 'Collect')]
+    [switch] $PasswordAuthentication,
+
+    [Parameter(ParameterSetName = 'Collect')]
     [string] $SshExecutable = 'ssh',
 
     [Parameter(ParameterSetName = 'Collect')]
@@ -68,16 +71,26 @@ run_section() {
 }
 
 function New-SshStartInfo {
-    param([string] $Executable, [string] $Destination, [int] $SshPort, [string] $KeyFile, [switch] $SkipHostKeyChecking)
+    param([string] $Executable, [string] $Destination, [int] $SshPort, [string] $KeyFile, [switch] $SkipHostKeyChecking, [switch] $PasswordAuthentication)
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = (Get-Command $Executable -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $info.UseShellExecute = $false
     $info.RedirectStandardInput = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $info.CreateNoWindow = $true
-    foreach ($argument in @('-T', '-p', "$SshPort", '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')) {
+    # SSH reads passwords directly from the attached terminal, separately from
+    # stdin carrying the remote script. Windows must inherit the console.
+    $info.CreateNoWindow = -not $PasswordAuthentication
+    foreach ($argument in @('-T', '-p', "$SshPort", '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')) {
         $info.ArgumentList.Add($argument)
+    }
+    $info.ArgumentList.Add('-o')
+    $info.ArgumentList.Add($(if ($PasswordAuthentication) { 'BatchMode=no' } else { 'BatchMode=yes' }))
+    if ($PasswordAuthentication) {
+        foreach ($argument in @('-o', 'PreferredAuthentications=password', '-o', 'PasswordAuthentication=yes', '-o', 'PubkeyAuthentication=no')) {
+            $info.ArgumentList.Add($argument)
+        }
+        $info.Environment['SSH_ASKPASS_REQUIRE'] = 'never'
     }
     $info.ArgumentList.Add('-o')
     $info.ArgumentList.Add($(if ($SkipHostKeyChecking) { 'StrictHostKeyChecking=no' } else { 'StrictHostKeyChecking=yes' }))
@@ -217,12 +230,15 @@ function Get-DiagnosticFindings([string] $SessionPath) {
     return @($groups.Values)
 }
 
-function Get-SshSetupHint([string] $SessionPath, [string] $HostKeyChecking) {
+function Get-SshSetupHint([string] $SessionPath, [string] $HostKeyChecking, [string] $AuthenticationMode) {
     $stderrPath = Join-Path $SessionPath 'ssh-stderr.log'
     if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { return }
     $stderr = [System.IO.File]::ReadAllText($stderrPath)
     if ($stderr -match 'Permission denied \([^\r\n)]*(?:publickey|password|keyboard-interactive)') {
-        return 'SSH login authentication failed. Load a key authorized for the target account into your SSH agent, or pass -IdentityFile with its private-key path. Batch collection does not prompt for passwords.'
+        if ($AuthenticationMode -eq 'password') {
+            return 'SSH password authentication failed or is unavailable for this account. Check the password and the router''s password-login settings, then retry -PasswordAuthentication from an interactive terminal.'
+        }
+        return 'SSH login authentication failed. Load a key authorized for the target account into your SSH agent, or pass -IdentityFile with its private-key path. Default batch collection does not prompt for passwords; use -PasswordAuthentication from an interactive terminal for a hidden SSH password prompt.'
     }
     if ($HostKeyChecking -eq 'disabled' -and $stderr -match 'host key|host identification') {
         return 'The destination was configured with host-key checking disabled. Inspect the selected SSH client and arguments in collection.json and any ProxyJump or ProxyCommand settings; a proxy connection can have separate host-key settings.'
@@ -270,8 +286,9 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $lines.Add('')
     $lines.Add("SSH exit code: $($Metadata.transport.exit_code); timed out: $($Metadata.transport.timed_out).")
     if ($Metadata.host_key_checking) { $lines.Add("Host key checking: $($Metadata.host_key_checking).") }
+    if ($Metadata.authentication) { $lines.Add("Authentication mode: $($Metadata.authentication).") }
     if ($Metadata.transport.error) { $lines.Add("Collection error: $($Metadata.transport.error)") }
-    $setupHint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking
+    $setupHint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking $Metadata.authentication
     if ($setupHint) {
         $lines.Add('')
         $lines.Add($setupHint)
@@ -320,7 +337,7 @@ function Complete-DiagnosticCapture([string] $SessionPath, $Metadata) {
         if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
             foreach ($line in (Get-Content -LiteralPath $stderrPath -Tail 20)) { [Console]::Error.WriteLine($line) }
         }
-        $hint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking
+        $hint = Get-SshSetupHint $SessionPath $Metadata.host_key_checking $Metadata.authentication
         if ($hint) { [Console]::Error.WriteLine($hint) }
         [Console]::Error.WriteLine("Failure details: $SessionPath")
         return 2
@@ -348,17 +365,22 @@ if ($MyInvocation.InvocationName -ne '.') {
             if ($metadata.schema_version -ne 1) { throw 'Unsupported collection schema version.' }
         } else {
             if (-not $Target) { throw 'Specify -Target root@ADDRESS to collect, or -AnalyzePath logs/openwrt/CAPTURE to reanalyze.' }
-            $info = New-SshStartInfo -Executable $SshExecutable -Destination $Target -SshPort $Port -KeyFile $IdentityFile -SkipHostKeyChecking:$SkipHostKeyChecking
+            if ($PasswordAuthentication -and [Console]::IsInputRedirected) {
+                throw '-PasswordAuthentication requires an interactive terminal. Run pwsh -File tools/openwrt-diagnostics.ps1 directly in your terminal without piping input.'
+            }
+            $info = New-SshStartInfo -Executable $SshExecutable -Destination $Target -SshPort $Port -KeyFile $IdentityFile -SkipHostKeyChecking:$SkipHostKeyChecking -PasswordAuthentication:$PasswordAuthentication
             $safeTarget = ($Target -replace '[^A-Za-z0-9_.-]', '_')
             if ($safeTarget.Length -gt 64) { $safeTarget = $safeTarget.Substring(0, 64) }
             $sessionName = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + $safeTarget + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
             $session = Join-Path $logRoot $sessionName
             [System.IO.Directory]::CreateDirectory($session) | Out-Null
             $token = '__OPENWRT_DIAG_' + [guid]::NewGuid().ToString('N') + '__'
+            if ($PasswordAuthentication) { Write-Host 'Enter the router password at the SSH prompt. Input is hidden.' }
             $metadata = [ordered]@{
                 schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o')
                 target = $Target; port = $Port
                 host_key_checking = if ($SkipHostKeyChecking) { 'disabled' } else { 'strict' }
+                authentication = if ($PasswordAuthentication) { 'password' } else { 'key-or-agent' }
                 ssh_client = $info.FileName; ssh_arguments = @($info.ArgumentList)
                 transport = Invoke-SshCapture -StartInfo $info -RemoteScript (New-RemoteScript $token) -SessionPath $session -Timeout $TimeoutSeconds
                 sections = @(Read-DiagnosticCapture -SessionPath $session -Token $token)
