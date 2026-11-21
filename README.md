@@ -118,6 +118,32 @@ if [ -f /etc/uci-defaults/99-custom ]; then echo 'Custom defaults pending'; else
 
 The scripts log topology and missing-Wi-Fi errors with the `99-custom` tag; individual failed UCI commands may also report errors outside that tag. OpenWrt retains a failed defaults script for retry on the next boot. Correct the reported topology or Wi-Fi configuration before rebooting; the retry reapplies the defaults, including the Wi-Fi security reset.
 
+## Collecting live diagnostics
+
+Use [`tools/openwrt-diagnostics.ps1`](tools/openwrt-diagnostics.ps1) from PowerShell 7 on Windows, Linux, or macOS with an OpenSSH client installed. Authenticate using an SSH key or agent and verify the router's host key with an interactive SSH connection before collecting. The collector uses batch authentication and requires an already trusted host key; it does not store passwords or disable host verification. Use `root` to access the complete system and kernel logs.
+
+From the repository root, collect and analyze a snapshot:
+
+```powershell
+pwsh -File tools/openwrt-diagnostics.ps1 -Target root@192.168.1.9
+```
+
+Use `-Port 2222` for a different SSH port, `-IdentityFile ~/.ssh/id_ed25519` for a specific key, or `-SshExecutable /path/to/ssh` for a specific client. OpenSSH host aliases and configuration are supported; the port defaults to 22, so pass `-Port` when an alias uses a different port. `-TimeoutSeconds 120` controls the overall SSH session timeout, while connection establishment has a 10-second timeout.
+
+The tooling runs fixed read-only commands in one SSH session. It retrieves `logread`, `dmesg`, board and firmware details, uptime, IP addresses and routes, interface counters, memory and filesystem usage, traffic-shaping queue statistics, and the presence of the custom defaults script. It does not export UCI configuration or Wi-Fi keys. Individual command failures and SSH failures are recorded, partial logs are retained, and the report identifies incomplete collection.
+
+Each run creates a timestamped directory under `logs/openwrt/`, containing individual section logs, the raw SSH output and stderr, `collection.json`, and findings in `findings.md` and `findings.json`. The entire `logs/` directory is Git-ignored, including all downloaded data, generated findings, and test fixtures. Logs can contain private addresses, MAC addresses, hostnames, or other sensitive messages; review them before sharing.
+
+The analyzer groups known kernel, memory, storage, watchdog, custom-defaults, Wi-Fi, DHCP, WAN, and DFS patterns, with source filenames and line numbers for up to five examples per group. DFS events are informational. Pattern matches are investigation leads rather than confirmed root causes; unmatched logs and a successful snapshot do not establish that the router is healthy. Counts refer to matching lines, and the same event can appear in both system and kernel logs. The other snapshots provide context for manual analysis.
+
+Reanalyze a saved capture without connecting to the router, replacing `CAPTURE` with its directory name:
+
+```powershell
+pwsh -File tools/openwrt-diagnostics.ps1 -AnalyzePath logs/openwrt/CAPTURE
+```
+
+Reanalysis updates only the findings in that capture directory. Exit codes are `0` for a complete snapshot or reanalysis, `2` when collection was incomplete, and `1` for an invocation or local processing error. Findings themselves do not change the exit code. Run the local tests without a router using `pwsh -File tools/test-openwrt-diagnostics.ps1`.
+
 ## Upstream source
 
 - Source: [chasey-dev/immortalwrt-mt798x-rebase](https://github.com/chasey-dev/immortalwrt-mt798x-rebase).
