@@ -61,7 +61,10 @@ Assert-True ((Get-Content -LiteralPath (Join-Path $testRoot 'findings.md') -Raw)
 $changedHint = Get-SshSetupHint $testRoot
 Assert-True ($changedHint.Contains('changed host key') -and -not $changedHint.Contains('StrictHostKeyChecking=ask')) 'Changed host keys must not get first-connection acceptance guidance.'
 'Permission denied (publickey).' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
-Assert-True (-not (Get-SshSetupHint $testRoot)) 'Authentication errors must not be misdiagnosed as host-key failures.'
+$authHint = Get-SshSetupHint $testRoot
+Assert-True ($authHint.Contains('login authentication failed') -and $authHint.Contains('-IdentityFile') -and -not $authHint.Contains('host key')) 'Authentication failures must get login-key guidance instead of host-key guidance.'
+'root@10.0.0.9: Permission denied (publickey,password).' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
+Assert-True ((Get-SshSetupHint $testRoot 'disabled').Contains('does not prompt for passwords')) 'Available password authentication must not be mistaken for an attempted password login.'
 
 # An interrupted SSH stream must retain its final partial section.
 $partialRoot = Join-Path $testRoot 'partial'
@@ -119,11 +122,13 @@ Assert-True (-not $remote.Contains("`r")) 'The remote script must use Unix line 
 [System.IO.File]::WriteAllText((Join-Path $testRoot 'remote.sh'), $remote, [System.Text.UTF8Encoding]::new($false))
 $sshInfo = New-SshStartInfo -Executable (Get-Process -Id $PID).Path -Destination 'root@192.168.1.9' -SshPort 2222
 Assert-True ($sshInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'Host key verification must stay enabled by default.'
-Assert-True (-not $sshInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'Default collection must use the saved host keys.'
+Assert-True (@($sshInfo.ArgumentList | Where-Object { $_ -like 'UserKnownHostsFile=*' }).Count -eq 0) 'Default collection must use the saved host keys.'
 Assert-True ($sshInfo.ArgumentList[$sshInfo.ArgumentList.Count - 2] -eq 'root@192.168.1.9') 'SSH target must be a separate argument.'
 $relaxedInfo = New-SshStartInfo -Executable (Get-Process -Id $PID).Path -Destination 'root@10.0.0.9' -SshPort 22 -SkipHostKeyChecking
 Assert-True ($relaxedInfo.ArgumentList.Contains('StrictHostKeyChecking=no') -and -not $relaxedInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'The explicit switch must disable strict checking.'
-Assert-True ($relaxedInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'Relaxed collection must not read or update the user host-key database.'
+$expectedNullDevice = if ($IsWindows) { 'NUL' } else { '/dev/null' }
+Assert-True ($relaxedInfo.ArgumentList.Contains("UserKnownHostsFile=$expectedNullDevice")) 'Relaxed collection must use the platform null device for host keys.'
+Assert-True (-not $relaxedInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'The Windows OpenSSH host-verification regression must not be reintroduced.'
 Assert-True ($relaxedInfo.ArgumentList.Contains('BatchMode=yes')) 'Skipping host-key checks must not change login authentication.'
 
 # Exercise both CLI reanalysis exit codes; findings do not make complete data fail.
@@ -161,6 +166,7 @@ Assert-True (-not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findin
 $failedMetadata = Get-Content -LiteralPath (Join-Path $failedDir.FullName 'collection.json') -Raw | ConvertFrom-Json
 Assert-True ($failedMetadata.status -eq 'not-started' -and $failedMetadata.transport -isnot [array]) 'Failed collection status or transport schema is incorrect.'
 Assert-True ($failedMetadata.ssh_arguments -contains 'StrictHostKeyChecking=no') 'The CLI skip switch did not reach the actual SSH invocation.'
+Assert-True ($failedMetadata.ssh_arguments -contains "UserKnownHostsFile=$expectedNullDevice") 'The actual SSH invocation must use the platform null device.'
 Assert-True ($failedMetadata.ssh_client -eq $pwsh) 'The selected SSH client was not recorded.'
 & $pwsh -NoProfile -File $collector -AnalyzePath $failedDir.FullName
 Assert-True ($LASTEXITCODE -eq 2 -and -not (Test-Path -LiteralPath (Join-Path $failedDir.FullName 'findings.md'))) 'Reanalysis must also reject captures without logs.'

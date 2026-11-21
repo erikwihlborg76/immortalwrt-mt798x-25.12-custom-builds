@@ -136,7 +136,9 @@ To collect without strict host-key checking, use:
 pwsh -File tools/openwrt-diagnostics.ps1 -Target root@10.0.0.9 -SkipHostKeyChecking
 ```
 
-This explicitly sets `StrictHostKeyChecking=no` and `UserKnownHostsFile=none`, allowing collection without enrolling the router's key and without reading or updating your user host-key database. It skips verification of the router's identity against that database; SSH key or agent authentication is still required. The selected mode is recorded in the capture metadata and report. [OpenSSH option reference](https://man.openbsd.org/ssh_config#StrictHostKeyChecking).
+This explicitly sets `StrictHostKeyChecking=no` and directs `UserKnownHostsFile` to the platform null device (`NUL` on Windows, `/dev/null` on Linux/macOS), allowing collection without enrolling the router's key and without reading or updating your user host-key database. Using the null device avoids a host-verification failure reproduced with Windows OpenSSH 9.5 and `UserKnownHostsFile=none`. It skips verification of the router's identity against that database; SSH key or agent authentication is still required. The selected mode is recorded in the capture metadata and report. [OpenSSH option reference](https://man.openbsd.org/ssh_config#StrictHostKeyChecking).
+
+If the router reports `Permission denied (publickey,password)`, the connection reached login authentication but the available keys were rejected. Load an authorized key into your SSH agent or pass `-IdentityFile` with its private-key path. The collector runs in batch mode and does not prompt for a password, even when the server offers password authentication.
 
 From the repository root, collect and analyze a snapshot:
 

@@ -82,8 +82,11 @@ function New-SshStartInfo {
     $info.ArgumentList.Add('-o')
     $info.ArgumentList.Add($(if ($SkipHostKeyChecking) { 'StrictHostKeyChecking=no' } else { 'StrictHostKeyChecking=yes' }))
     if ($SkipHostKeyChecking) {
+        # Windows OpenSSH 9.5 can reject an unknown host with a file list of
+        # 'none', despite StrictHostKeyChecking=no. A null device works there.
+        $nullDevice = if ($IsWindows) { 'NUL' } else { '/dev/null' }
         $info.ArgumentList.Add('-o')
-        $info.ArgumentList.Add('UserKnownHostsFile=none')
+        $info.ArgumentList.Add("UserKnownHostsFile=$nullDevice")
     }
     if ($KeyFile) {
         $info.ArgumentList.Add('-i')
@@ -218,6 +221,9 @@ function Get-SshSetupHint([string] $SessionPath, [string] $HostKeyChecking) {
     $stderrPath = Join-Path $SessionPath 'ssh-stderr.log'
     if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { return }
     $stderr = [System.IO.File]::ReadAllText($stderrPath)
+    if ($stderr -match 'Permission denied \([^\r\n)]*(?:publickey|password|keyboard-interactive)') {
+        return 'SSH login authentication failed. Load a key authorized for the target account into your SSH agent, or pass -IdentityFile with its private-key path. Batch collection does not prompt for passwords.'
+    }
     if ($HostKeyChecking -eq 'disabled' -and $stderr -match 'host key|host identification') {
         return 'The destination was configured with host-key checking disabled. Inspect the selected SSH client and arguments in collection.json and any ProxyJump or ProxyCommand settings; a proxy connection can have separate host-key settings.'
     }
