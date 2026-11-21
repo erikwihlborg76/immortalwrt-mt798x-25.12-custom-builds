@@ -42,6 +42,33 @@ Assert-True ($oom.evidence[0].file -eq 'logread.log' -and $oom.evidence[0].line 
 Assert-True (($findings | Where-Object id -eq 'dfs').severity -eq 'info') 'Normal DFS activity must not be treated as a failure.'
 Assert-True (-not ($findings | Where-Object id -eq 'wan')) 'WAN coming up must not be treated as a failure.'
 
+# Routine function names and crash-buffer setup must not become incident findings.
+$ruleRoot = Join-Path $testRoot 'rule-regressions'
+[System.IO.Directory]::CreateDirectory($ruleRoot) | Out-Null
+@(
+    'kernel: ramoops: using reserved crash-log memory',
+    'kernel: WiFi@C23L3,DfsRadarChannelCheck() 3433: wdev is not 5G',
+    'kernel: 7986@C23L3,Dot11HCntDownTimeoutAction() 832: cac not req 0'
+) | Set-Content -LiteralPath (Join-Path $ruleRoot 'logread.log')
+Assert-True (@(Get-DiagnosticFindings $ruleRoot).Count -eq 0) 'Routine ramoops/DFS messages were misclassified as incidents.'
+@(
+    'kernel: Oops: fatal exception',
+    'kernel: Kernel panic - not syncing',
+    'kernel: 7986@C23L1,operate_loader_phy() 375: phy_freq_adjust failed!',
+    'kernel: warp_dev0 wed2: probe with driver warp_dev0 failed with error -1',
+    'kernel: DfsOutBandCacCountUpdate() 7609: OutBand CAC complete and is available now.',
+    'kernel: dfs_off_cac_end_update() 3751: Zero-wait CAC ch 64 is available, bandidx 1',
+    'kernel: radar detected on channel 104',
+    "99-custom: WAN device 'eth1' is missing or is a bridge; review VLAN/device mapping before applying defaults"
+) | Set-Content -LiteralPath (Join-Path $ruleRoot 'logread.log')
+$ruleFindings = @(Get-DiagnosticFindings $ruleRoot)
+Assert-True (($ruleFindings | Where-Object id -eq 'kernel-fault').matched_lines -eq 2) 'Real Oops and panic messages must still be detected.'
+Assert-True (($ruleFindings | Where-Object id -eq 'dfs').matched_lines -eq 2) 'Actual CAC completions and availability messages must be detected.'
+Assert-True (($ruleFindings | Where-Object id -eq 'radar').matched_lines -eq 1) 'Radar detection must be separated from routine DFS processing.'
+Assert-True (($ruleFindings | Where-Object id -eq 'wifi-driver').matched_lines -eq 1) 'MediaTek numeric driver prefixes must be recognized.'
+Assert-True (($ruleFindings | Where-Object id -eq 'offload').matched_lines -eq 1) 'WED probe failures must be surfaced without declaring all acceleration broken.'
+Assert-True (($ruleFindings | Where-Object id -eq 'custom-defaults').matched_lines -eq 1) 'Missing WAN-device errors must be detected.'
+
 $metadata = [ordered]@{ schema_version = 1; transport = @{ exit_code = 0; timed_out = $false; error = $null }; sections = $sections }
 $metadata | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $testRoot 'collection.json')
 $null = Write-DiagnosticReport $testRoot $metadata

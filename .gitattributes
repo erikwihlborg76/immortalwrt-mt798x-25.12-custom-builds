@@ -1,0 +1,2 @@
+uci-defaults/* text eol=lf
+tools/*.sh text eol=lf

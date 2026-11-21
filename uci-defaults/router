@@ -25,7 +25,7 @@ find_device_section() {
 }
 
 # Both supported boards generate a LAN bridge and a separate physical WAN.
-# Refuse an incompatible saved topology instead of silently skipping ports.
+# Validate topology before staging any changes.
 wan_device="$(uci -q get network.wan.device || true)"
 lan_device="$(uci -q get network.lan.device || true)"
 lan_bridge_section="$(find_device_section "$lan_device" || true)"
@@ -33,6 +33,54 @@ if [ -z "$wan_device" ] || [ -z "$lan_device" ] || [ -z "$lan_bridge_section" ] 
    [ "$(uci -q get "network.$lan_bridge_section.type" || true)" != 'bridge' ]; then
 	logger -t 99-custom 'Expected a LAN bridge and a physical WAN device; defaults were not applied'
 	exit 1
+fi
+
+# OpenWrt 25.12 labels the Zyxel's former eth1 port as wan. Only migrate
+# the plain-device layout when the kernel confirms that rename.
+migrate_zyxel_wan=0
+legacy_device_section=''
+board="$(cat /tmp/sysinfo/board_name 2>/dev/null || true)"
+case "$board" in
+	zyxel,ex5601-t0-stock|zyxel,ex5601-t0-ubootmod)
+		if [ -e /sys/class/net/wan ] && [ ! -e /sys/class/net/eth1 ]; then
+			wan6_device="$(uci -q get network.wan6.device || true)"
+			case "$wan_device:$wan6_device" in
+				eth1.*:*|*:eth1.*)
+					logger -t 99-custom 'Legacy Zyxel WAN VLAN references require manual migration from eth1 to wan; defaults were not applied'
+					exit 1
+					;;
+			esac
+			case "$wan_device" in
+				eth1|wan)
+					wan_device='wan'
+					migrate_zyxel_wan=1
+					legacy_device_section="$(find_device_section eth1 || true)"
+					if [ -n "$legacy_device_section" ] && [ -n "$(find_device_section wan || true)" ]; then
+						logger -t 99-custom 'Conflicting Zyxel eth1 and wan device sections require manual review; defaults were not applied'
+						exit 1
+					fi
+					;;
+			esac
+		fi
+		;;
+esac
+
+if [ ! -e "/sys/class/net/$wan_device" ] || [ "$wan_device" = "$lan_device" ] || \
+   [ -d "/sys/class/net/$wan_device/bridge" ]; then
+	logger -t 99-custom "WAN device '$wan_device' is missing or is a bridge; review VLAN/device mapping before applying defaults"
+	exit 1
+fi
+
+if [ "$migrate_zyxel_wan" -eq 1 ]; then
+	uci set network.wan.device='wan' || exit 1
+	if [ "$wan6_device" = 'eth1' ]; then
+		uci set network.wan6.device='wan' || exit 1
+	fi
+	if [ -n "$legacy_device_section" ]; then
+		uci set "network.$legacy_device_section.name=wan" || exit 1
+	fi
+	uci -q del_list "network.$lan_bridge_section.ports=eth1" || true
+	logger -t 99-custom 'Using Zyxel WAN device wan; removed legacy plain eth1 references'
 fi
 
 for option in \

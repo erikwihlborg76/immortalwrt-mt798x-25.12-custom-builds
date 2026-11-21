@@ -47,6 +47,19 @@ function Get-DiagnosticCommands {
         memory = 'free'
         storage = 'df -h'
         qdisc = 'tc -s qdisc show'
+        wanconfig = @'
+for option in network.wan.device network.wan6.device network.wan.proto network.wan.disabled network.lan.device; do
+    value="$(uci -q get "$option" || true)"
+    printf '%s=%s\n' "$option" "$value"
+done
+index=0
+while name="$(uci -q get "network.@device[$index].name")"; do
+    ports="$(uci -q get "network.@device[$index].ports" || true)"
+    printf 'device[%s].name=%s\ndevice[%s].ports=%s\n' "$index" "$name" "$index" "$ports"
+    index=$((index + 1))
+done
+exit 0
+'@
         defaults = "if [ -f /etc/uci-defaults/99-custom ]; then printf 'pending\n'; else printf 'complete-or-absent\n'; fi"
     }
 }
@@ -185,15 +198,17 @@ function Read-DiagnosticCapture([string] $SessionPath, [string] $Token) {
 
 function Get-DiagnosticFindings([string] $SessionPath) {
     $rules = @(
-        @{ id = 'kernel-fault'; severity = 'error'; title = 'Kernel fault reported'; pattern = 'Kernel panic|Oops:|BUG: (?:unable to handle|kernel)|Unable to handle kernel'; advice = 'Inspect the complete kernel log and record the firmware revision and activity preceding the fault.' },
+        @{ id = 'kernel-fault'; severity = 'error'; title = 'Kernel fault reported'; pattern = '\bKernel panic|\bOops:|\bBUG: (?:unable to handle|kernel)|\bUnable to handle kernel'; advice = 'Inspect the complete kernel log and record the firmware revision and activity preceding the fault.' },
         @{ id = 'out-of-memory'; severity = 'error'; title = 'Out-of-memory event reported'; pattern = 'Out of memory:|oom-kill:|invoked oom-killer|Killed process \d+'; advice = 'Review memory usage and the processes named in the full logs; a current memory snapshot may have recovered after the event.' },
         @{ id = 'storage-error'; severity = 'error'; title = 'Storage error reported'; pattern = '\bI/O error\b|UBIFS error|EXT4-fs error|JFFS2.*(?:error|corrupt)'; advice = 'Inspect the surrounding filesystem and flash messages before changing packages or configuration.' },
         @{ id = 'watchdog'; severity = 'warning'; title = 'Watchdog or stalled task reported'; pattern = 'NETDEV WATCHDOG|soft lockup|hard LOCKUP|blocked for more than|rcu[^\r\n]*stall'; advice = 'Correlate the event with load, driver messages, and the surrounding kernel trace.' },
-        @{ id = 'custom-defaults'; severity = 'error'; title = 'Custom defaults failure reported'; pattern = '99-custom.*(?:Expected a LAN bridge|No Wi-Fi radio found|No Wi-Fi AP interface found)'; advice = 'Review the generated LAN bridge, WAN device, and Wi-Fi sections. Network settings may already have been committed before a Wi-Fi failure.' },
-        @{ id = 'wifi-driver'; severity = 'warning'; title = 'Wi-Fi driver failure or timeout reported'; pattern = '(?:mt_wifi|mtwifi|mt76|mt798[16]|firmware)[^\r\n]*(?:timed out|timeout|assert|crash|failed)'; advice = 'Inspect surrounding driver messages and correlate with client interruptions; these patterns alone do not establish a cause.' },
+        @{ id = 'custom-defaults'; severity = 'error'; title = 'Custom defaults failure reported'; pattern = '99-custom.*(?:Expected a LAN bridge|No Wi-Fi radio found|No Wi-Fi AP interface found|WAN device .+ is missing|Legacy Zyxel WAN VLAN|Conflicting Zyxel eth1)'; advice = 'Review the generated LAN bridge, WAN device, and Wi-Fi sections. Network settings may already have been committed before a Wi-Fi failure.' },
+        @{ id = 'wifi-driver'; severity = 'warning'; title = 'Wi-Fi driver failure or timeout reported'; pattern = '(?:mt_wifi|mtwifi|mt76|mt798[16]|798[16]@|WiFi@|firmware)[^\r\n]*\b(?:timed out|timeout|assert(?:ion)?|crash(?:ed)?|failed)\b'; advice = 'Inspect surrounding driver messages and correlate with client interruptions; these patterns alone do not establish a cause.' },
+        @{ id = 'offload'; severity = 'warning'; title = 'Wi-Fi offload probe failure reported'; pattern = 'warp_dev\d+.*probe.*failed|warp_probe\(\).*probe fail since warp is full'; advice = 'Inspect surrounding WARP firmware-ready messages and measure offload operation under load. A failed duplicate probe does not establish that all acceleration is unavailable.' },
         @{ id = 'dhcp'; severity = 'warning'; title = 'DHCP lease acquisition or pool problem reported'; pattern = 'udhcpc.*(?:no lease|lease failed)|dnsmasq.*no address range available'; advice = 'Check the affected interface, upstream DHCP availability, and configured address ranges.' },
         @{ id = 'wan'; severity = 'warning'; title = 'WAN or PPP connection event reported'; pattern = 'netifd.*Interface .+ is now down|pppd.*(?:authentication failed|Connection terminated|timeout)'; advice = 'Check whether this was an expected startup/reconnect event and correlate with upstream connectivity.' },
-        @{ id = 'dfs'; severity = 'info'; title = 'DFS radar or channel-availability activity reported'; pattern = 'radar detected|radar detection triggered|CAC.*(?:started|completed|finished)|DFS.*(?:switch|radar)'; advice = 'DFS activity can be normal. Correlate timestamps with channel changes and interruptions; this finding is not a driver-failure diagnosis.' }
+        @{ id = 'radar'; severity = 'info'; title = 'Radar detection reported'; pattern = '\bradar (?:was )?detected\b|\bradar detection triggered\b'; advice = 'Correlate the detection with channel changes and client interruptions. Matching lines are not unique radar events.' },
+        @{ id = 'dfs'; severity = 'info'; title = 'DFS CAC or channel transition reported'; pattern = '\bCAC\b.*\b(?:started|completed|finished|complete)\b|\bdfs_off_cac_end_update\b.*(?:zero-wait CAC end|Zero-wait CAC ch \d+ is available)|\bDfsDedicatedOutBandRDDStart\b.*Dedicated CAC time|\bDfsDedicatedInBandSetChannel\b.*InBand set to OutBand Channel|\bzero_wait_dfs_switch_ch\b.*OUTBAND_SWITCH'; advice = 'CAC and channel transitions can be normal. Correlate timestamps with interruptions; routine DFS activity is not a radar-detection or driver-failure diagnosis.' }
     )
     $groups = [ordered]@{}
     foreach ($name in @('logread', 'dmesg')) {

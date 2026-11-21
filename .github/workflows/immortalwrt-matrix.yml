@@ -28,6 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Test first-boot defaults
+        run: sh tools/test-uci-defaults.sh
+
+      - name: Test diagnostic tooling
+        shell: pwsh
+        run: ./tools/test-openwrt-diagnostics.ps1
+
       - name: Detect config directory
         id: find-config-dir
         run: |

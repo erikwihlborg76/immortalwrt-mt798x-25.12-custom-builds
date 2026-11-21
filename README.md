@@ -70,6 +70,8 @@ The AP is a bridge behind an existing router, which must provide DHCP and routin
 
 Both scripts expect the generated LAN bridge and a separate physical WAN device. Review custom VLAN/bridge layouts before flashing. Missing topology, missing Wi-Fi sections, or failed required UCI writes cause the script to fail; see [Troubleshooting defaults](#troubleshooting-defaults) for partial changes and retry behavior.
 
+The Zyxel uses `wan` as its physical WAN device in OpenWrt/ImmortalWrt 25.12; the GL-MT3000 uses `eth0`. The Zyxel naming follows [OpenWrt's intentional `eth1` to `wan` change](https://github.com/openwrt/openwrt/commit/f26260c7e75112429901fff59ef0a0f5601c5675). The defaults verify that the selected WAN device exists. On a Zyxel with `wan` present and `eth1` absent, they migrate plain `eth1` references in WAN/WAN6, an optional device section, and LAN bridge membership, retaining the saved WAN protocol and credentials. Legacy `eth1.VLAN` references and conflicting `eth1`/`wan` device sections require manual review and stop the defaults before any UCI changes. Existing SQM interface selections are also preserved and must be checked separately after a device rename.
+
 ## Wireless and DFS
 
 Both roles set the timezone to `Europe/Stockholm` and the Wi-Fi country to `SE`. The Wi-Fi security reset described under [Installation](#installation) applies to every existing interface whose mode is `ap`, including those in router images. The scripts preserve SSIDs and radio/interface enable flags; a disabled radio or interface stays disabled.
@@ -96,7 +98,7 @@ On a clean installation SQM queues are disabled until configured. Installing the
 To use SQM on the router:
 
 1. Open **Network → SQM QoS** in LuCI.
-2. Select the actual WAN network device, not the LAN bridge. With the default Ethernet WAN layout this is `eth1` on the Zyxel and `eth0` on the GL-MT3000; PPPoE or VLAN configurations can use a different device.
+2. Select the actual WAN network device, not the LAN bridge. With the default Ethernet WAN layout this is `wan` on the Zyxel and `eth0` on the GL-MT3000; PPPoE or VLAN configurations can use a different device. Review preserved SQM settings that still reference the Zyxel's former `eth1` name.
 3. Set download/upload rates for the connection, choose `cake` and `piece_of_cake.qos`, and configure link-layer overhead for the WAN type.
 4. Disable hardware NAT/flow acceleration, including MediaTek HNAT in TurboACC. Hardware acceleration bypasses SQM's CPU traffic shaping. Avoid running another QoS/shaper on the same interface at the same time.
 5. Enable the queue, save/apply, and measure latency under load. SQM uses the CPU, so available throughput depends on the device and chosen settings.
@@ -112,6 +114,8 @@ After connecting over SSH or a local console, inspect the diagnostic messages, s
 ```sh
 logread -e 99-custom
 uci -q get network.lan.ipaddr
+uci -q get network.wan.device
+ubus call network.device status '{"name":"br-lan"}'
 ip -4 addr show
 if [ -f /etc/uci-defaults/99-custom ]; then echo 'Custom defaults pending'; else echo 'No pending custom defaults'; fi
 ```
@@ -154,11 +158,11 @@ pwsh -File tools/openwrt-diagnostics.ps1 -Target root@192.168.1.9
 
 Use `-Port 2222` for a different SSH port, `-IdentityFile ~/.ssh/id_ed25519` for a specific key, or `-SshExecutable /path/to/ssh` for a specific client. OpenSSH host aliases and configuration are supported; the port defaults to 22, so pass `-Port` when an alias uses a different port. `-TimeoutSeconds 120` controls the overall SSH session timeout, while connection establishment has a 10-second timeout.
 
-The tooling runs fixed read-only commands in one SSH session. It retrieves `logread`, `dmesg`, board and firmware details, uptime, IP addresses and routes, interface counters, memory and filesystem usage, traffic-shaping queue statistics, and the presence of the custom defaults script. It does not export UCI configuration or Wi-Fi keys. Individual command failures and SSH failures are recorded, partial logs are retained, and the report identifies incomplete collection.
+The tooling runs fixed read-only commands in one SSH session. It retrieves `logread`, `dmesg`, board and firmware details, uptime, IP addresses and routes, interface counters, memory and filesystem usage, traffic-shaping queue statistics, selected WAN/LAN device names and bridge port lists, and the presence of the custom defaults script. It does not export full UCI configuration, WAN credentials, or Wi-Fi keys. Individual command failures and SSH failures are recorded, partial logs are retained, and the report identifies incomplete collection.
 
 Each attempt saves troubleshooting details in a timestamped directory under `logs/openwrt/`: raw SSH output and stderr plus `collection.json`, including the selected SSH client, arguments, transport result, and collection status. If remote diagnostics never start or neither system nor kernel logs can be retrieved, the script prints the failure and SSH error, exits with code `2`, and generates no findings. Successful or useful partial captures also contain individual section logs and findings in `findings.md` and `findings.json`; partial captures are explicitly labeled. The entire `logs/` directory is Git-ignored, including all downloaded data, generated findings, and test fixtures. Logs can contain private addresses, MAC addresses, hostnames, or other sensitive messages; review them before sharing.
 
-The analyzer groups known kernel, memory, storage, watchdog, custom-defaults, Wi-Fi, DHCP, WAN, and DFS patterns, with source filenames and line numbers for up to five examples per group. DFS events are informational. Pattern matches are investigation leads rather than confirmed root causes; unmatched logs and a successful snapshot do not establish that the router is healthy. Counts refer to matching lines, and the same event can appear in both system and kernel logs. The other snapshots provide context for manual analysis.
+The analyzer groups known kernel, memory, storage, watchdog, custom-defaults, Wi-Fi/offload, DHCP, WAN, radar, and DFS patterns, with source filenames and line numbers for up to five examples per group. Radar detection and routine CAC/channel transitions are separate informational groups; routine DFS function names and `ramoops` initialization are excluded. Pattern matches are investigation leads rather than confirmed root causes; unmatched logs and a successful snapshot do not establish that the router is healthy. Counts refer to matching lines, and the same event can appear in both system and kernel logs. The other snapshots provide context for manual analysis.
 
 Reanalyze a saved capture without connecting to the router, replacing `CAPTURE` with its directory name:
 
@@ -180,11 +184,11 @@ The workflow follows this branch rather than pinning an upstream commit. Each re
 
 - Corrected MediaTek country/region mappings and dedicated zero-wait DFS configuration.
 - MediaTek Wi-Fi/LuCI tools and diagnostics.
-- Restored Zyxel EX5601 LAN/WAN board mapping missing from the upstream source.
+- Zyxel EX5601 WAN-device validation and migration of legacy plain `eth1` references to the upstream `wan` name.
 - SQM support with LuCI and CAKE.
 
 See [`defconfig/`](defconfig) for package, driver, and device-specific firmware selections, and [`patches/`](patches) for local source changes.
 
 ## Building
 
-The [GitHub Actions workflow](.github/workflows/immortalwrt-matrix.yml) runs on pushes to `main` and tags matching `v*`. It discovers device configs, merges the shared baseline with each device config, applies local patches, installs the selected first-boot script, and compiles a complete firmware for each role and subnet combination. The workflow checks first-boot script syntax and rejects a generated config that drops the requested device or required SQM packages. It currently uses full source builds, rather than Image Builder.
+The [GitHub Actions workflow](.github/workflows/immortalwrt-matrix.yml) runs on pushes to `main` and tags matching `v*`. It tests the first-boot defaults and diagnostic tooling, discovers device configs, merges the shared baseline with each device config, applies local patches, installs the selected first-boot script, and compiles a complete firmware for each role and subnet combination. The workflow checks first-boot script syntax and rejects a generated config that drops the requested device or required SQM packages. Run the same local checks with `sh tools/test-uci-defaults.sh` and `pwsh -File tools/test-openwrt-diagnostics.ps1`. It currently uses full source builds, rather than Image Builder.
