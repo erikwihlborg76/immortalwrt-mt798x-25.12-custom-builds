@@ -50,6 +50,18 @@ Assert-True ($report.Contains('Collection is incomplete')) 'A failed section mus
 $json = Get-Content -LiteralPath (Join-Path $testRoot 'findings.json') -Raw | ConvertFrom-Json
 Assert-True ($json.findings.Count -eq 4) 'Machine-readable report is missing findings.'
 
+# Give actionable first-connection guidance, while treating changed keys separately.
+$unknownKeyError = 'No ED25519 host key is known for 10.0.0.9 and you have requested strict checking.' + "`nHost key verification failed."
+$unknownKeyError | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
+Assert-True ((Get-SshSetupHint $testRoot).Contains('StrictHostKeyChecking=ask')) 'Unknown host keys need interactive setup guidance.'
+$null = Write-DiagnosticReport $testRoot $metadata
+Assert-True ((Get-Content -LiteralPath (Join-Path $testRoot 'findings.md') -Raw).Contains('StrictHostKeyChecking=ask')) 'Host-key setup guidance is missing from the report.'
+'WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! Host key verification failed.' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
+$changedHint = Get-SshSetupHint $testRoot
+Assert-True ($changedHint.Contains('changed host key') -and -not $changedHint.Contains('StrictHostKeyChecking=ask')) 'Changed host keys must not get first-connection acceptance guidance.'
+'Permission denied (publickey).' | Set-Content -LiteralPath (Join-Path $testRoot 'ssh-stderr.log')
+Assert-True (-not (Get-SshSetupHint $testRoot)) 'Authentication errors must not be misdiagnosed as host-key failures.'
+
 # An interrupted SSH stream must retain its final partial section.
 $partialRoot = Join-Path $testRoot 'partial'
 [System.IO.Directory]::CreateDirectory($partialRoot) | Out-Null

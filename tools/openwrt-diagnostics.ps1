@@ -205,6 +205,18 @@ function Get-DiagnosticFindings([string] $SessionPath) {
     return @($groups.Values)
 }
 
+function Get-SshSetupHint([string] $SessionPath) {
+    $stderrPath = Join-Path $SessionPath 'ssh-stderr.log'
+    if (-not (Test-Path -LiteralPath $stderrPath -PathType Leaf)) { return }
+    $stderr = [System.IO.File]::ReadAllText($stderrPath)
+    if ($stderr -match 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key for [^\r\n]+ has changed') {
+        return 'SSH reports a changed host key. Verify the new fingerprint independently before updating the saved key for this router. Collection will continue to reject the changed key until trust is resolved.'
+    }
+    if ($stderr -match 'No [^\r\n]+ host key is known|Host key verification failed') {
+        return 'SSH could not verify the router host key. Connect interactively using StrictHostKeyChecking=ask with the same SSH client, target, port, and identity settings. Verify the displayed fingerprint belongs to your router before accepting it, exit the session, then rerun collection.'
+    }
+}
+
 function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $findings = @(Get-DiagnosticFindings $SessionPath)
     $report = [ordered]@{
@@ -221,6 +233,11 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $lines.Add('')
     $lines.Add("SSH exit code: $($Metadata.transport.exit_code); timed out: $($Metadata.transport.timed_out).")
     if ($Metadata.transport.error) { $lines.Add("Collection error: $($Metadata.transport.error)") }
+    $setupHint = Get-SshSetupHint $SessionPath
+    if ($setupHint) {
+        $lines.Add('')
+        $lines.Add($setupHint)
+    }
     $lines.Add('')
     $lines.Add('| Section | Status | Exit code |')
     $lines.Add('| --- | --- | --- |')
@@ -285,6 +302,8 @@ if ($MyInvocation.InvocationName -ne '.') {
         $count = Write-DiagnosticReport -SessionPath $session -Metadata $metadata
         Write-Host "Capture: $session"
         Write-Host "Findings: $(Join-Path $session 'findings.md') ($count groups)"
+        $setupHint = Get-SshSetupHint $session
+        if ($setupHint) { [Console]::Error.WriteLine($setupHint) }
         if ($metadata.transport.exit_code -ne 0 -or $metadata.transport.timed_out -or $metadata.transport.error -or @($metadata.sections | Where-Object status -ne 'captured').Count) { exit 2 }
     } catch {
         [Console]::Error.WriteLine($_.Exception.Message)

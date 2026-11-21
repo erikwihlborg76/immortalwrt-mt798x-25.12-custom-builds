@@ -122,6 +122,14 @@ The scripts log topology and missing-Wi-Fi errors with the `99-custom` tag; indi
 
 Use [`tools/openwrt-diagnostics.ps1`](tools/openwrt-diagnostics.ps1) from PowerShell 7 on Windows, Linux, or macOS with an OpenSSH client installed. Authenticate using an SSH key or agent and verify the router's host key with an interactive SSH connection before collecting. The collector uses batch authentication and requires an already trusted host key; it does not store passwords or disable host verification. Use `root` to access the complete system and kernel logs.
 
+For a first connection to `10.0.0.9`, run:
+
+```powershell
+ssh -o StrictHostKeyChecking=ask root@10.0.0.9
+```
+
+Verify that the displayed fingerprint belongs to your router before answering `yes`, then exit the SSH session. Use the same SSH client, target, port (`-p`), and identity file (`-i`) as the collector. This resolves the error `No ED25519 host key is known ... and you have requested strict checking`. A changed-host-key warning needs separate verification of the replacement key before updating the saved entry.
+
 From the repository root, collect and analyze a snapshot:
 
 ```powershell
