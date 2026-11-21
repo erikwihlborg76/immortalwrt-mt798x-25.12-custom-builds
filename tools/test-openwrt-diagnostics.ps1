@@ -112,8 +112,13 @@ $remote = New-RemoteScript $token
 Assert-True (-not $remote.Contains("`r")) 'The remote script must use Unix line endings, including after a Windows checkout.'
 [System.IO.File]::WriteAllText((Join-Path $testRoot 'remote.sh'), $remote, [System.Text.UTF8Encoding]::new($false))
 $sshInfo = New-SshStartInfo -Executable (Get-Process -Id $PID).Path -Destination 'root@192.168.1.9' -SshPort 2222
-Assert-True ($sshInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'Host key verification must stay enabled.'
+Assert-True ($sshInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'Host key verification must stay enabled by default.'
+Assert-True (-not $sshInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'Default collection must use the saved host keys.'
 Assert-True ($sshInfo.ArgumentList[$sshInfo.ArgumentList.Count - 2] -eq 'root@192.168.1.9') 'SSH target must be a separate argument.'
+$relaxedInfo = New-SshStartInfo -Executable (Get-Process -Id $PID).Path -Destination 'root@10.0.0.9' -SshPort 22 -SkipHostKeyChecking
+Assert-True ($relaxedInfo.ArgumentList.Contains('StrictHostKeyChecking=no') -and -not $relaxedInfo.ArgumentList.Contains('StrictHostKeyChecking=yes')) 'The explicit switch must disable strict checking.'
+Assert-True ($relaxedInfo.ArgumentList.Contains('UserKnownHostsFile=none')) 'Relaxed collection must not read or update the user host-key database.'
+Assert-True ($relaxedInfo.ArgumentList.Contains('BatchMode=yes')) 'Skipping host-key checks must not change login authentication.'
 
 # Exercise both CLI reanalysis exit codes; findings do not make complete data fail.
 $pwsh = (Get-Process -Id $PID).Path

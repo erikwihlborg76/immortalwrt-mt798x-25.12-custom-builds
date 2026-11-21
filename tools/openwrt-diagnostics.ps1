@@ -13,6 +13,9 @@ param(
     [string] $IdentityFile,
 
     [Parameter(ParameterSetName = 'Collect')]
+    [switch] $SkipHostKeyChecking,
+
+    [Parameter(ParameterSetName = 'Collect')]
     [string] $SshExecutable = 'ssh',
 
     [Parameter(ParameterSetName = 'Collect')]
@@ -65,7 +68,7 @@ run_section() {
 }
 
 function New-SshStartInfo {
-    param([string] $Executable, [string] $Destination, [int] $SshPort, [string] $KeyFile)
+    param([string] $Executable, [string] $Destination, [int] $SshPort, [string] $KeyFile, [switch] $SkipHostKeyChecking)
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = (Get-Command $Executable -CommandType Application -ErrorAction Stop).Source
     $info.UseShellExecute = $false
@@ -73,8 +76,14 @@ function New-SshStartInfo {
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
     $info.CreateNoWindow = $true
-    foreach ($argument in @('-T', '-p', "$SshPort", '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')) {
+    foreach ($argument in @('-T', '-p', "$SshPort", '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')) {
         $info.ArgumentList.Add($argument)
+    }
+    $info.ArgumentList.Add('-o')
+    $info.ArgumentList.Add($(if ($SkipHostKeyChecking) { 'StrictHostKeyChecking=no' } else { 'StrictHostKeyChecking=yes' }))
+    if ($SkipHostKeyChecking) {
+        $info.ArgumentList.Add('-o')
+        $info.ArgumentList.Add('UserKnownHostsFile=none')
     }
     if ($KeyFile) {
         $info.ArgumentList.Add('-i')
@@ -232,6 +241,7 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $lines.Add('Pattern-based triage of a read-only snapshot. Findings are leads, not confirmed root causes. No matching patterns does not establish that the router is healthy. Log buffers may omit earlier events; logread and dmesg may contain the same event, so matched-line counts are not unique incident counts.')
     $lines.Add('')
     $lines.Add("SSH exit code: $($Metadata.transport.exit_code); timed out: $($Metadata.transport.timed_out).")
+    if ($Metadata.host_key_checking) { $lines.Add("Host key checking: $($Metadata.host_key_checking).") }
     if ($Metadata.transport.error) { $lines.Add("Collection error: $($Metadata.transport.error)") }
     $setupHint = Get-SshSetupHint $SessionPath
     if ($setupHint) {
@@ -283,7 +293,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             if ($metadata.schema_version -ne 1) { throw 'Unsupported collection schema version.' }
         } else {
             if (-not $Target) { throw 'Specify -Target root@ADDRESS to collect, or -AnalyzePath logs/openwrt/CAPTURE to reanalyze.' }
-            $info = New-SshStartInfo -Executable $SshExecutable -Destination $Target -SshPort $Port -KeyFile $IdentityFile
+            $info = New-SshStartInfo -Executable $SshExecutable -Destination $Target -SshPort $Port -KeyFile $IdentityFile -SkipHostKeyChecking:$SkipHostKeyChecking
             $safeTarget = ($Target -replace '[^A-Za-z0-9_.-]', '_')
             if ($safeTarget.Length -gt 64) { $safeTarget = $safeTarget.Substring(0, 64) }
             $sessionName = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + $safeTarget + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -293,6 +303,7 @@ if ($MyInvocation.InvocationName -ne '.') {
             $metadata = [ordered]@{
                 schema_version = 1; started_at_utc = [DateTime]::UtcNow.ToString('o')
                 target = $Target; port = $Port
+                host_key_checking = if ($SkipHostKeyChecking) { 'disabled' } else { 'strict' }
                 transport = Invoke-SshCapture -StartInfo $info -RemoteScript (New-RemoteScript $token) -SessionPath $session -Timeout $TimeoutSeconds
                 sections = @(Read-DiagnosticCapture -SessionPath $session -Token $token)
                 finished_at_utc = [DateTime]::UtcNow.ToString('o')
