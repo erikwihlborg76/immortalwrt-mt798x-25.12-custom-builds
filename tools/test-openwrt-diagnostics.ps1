@@ -226,3 +226,7 @@ $noLogsMetadata = @{ transport = @{ exit_code = 0; timed_out = $false; error = $
 ) }
 Assert-True ((Get-DiagnosticCaptureState $failedDir.FullName $noLogsMetadata) -eq 'no-logs') 'Missing log buffers must prevent analysis.'
 Write-Host "All diagnostic tests passed. Ignored fixtures: $([System.IO.Path]::GetFullPath($testRoot))"
+
+# Expected CLI failures leave LASTEXITCODE nonzero. GitHub Actions propagates
+# that value after the script returns, so report success only after all asserts.
+exit 0
