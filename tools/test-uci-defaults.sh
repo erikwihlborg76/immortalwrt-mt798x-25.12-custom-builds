@@ -28,7 +28,7 @@ uci() {
         commit) [ "${1:-}" != "${UCI_FAIL_COMMIT:-}" ] || return 1 ;;
     esac
     if [ -n "$UCI_REAL" ]; then
-        "$UCI_REAL" -c "$UCI_CASE/config" -P "$UCI_CASE/delta" "$action" "$@" || return $?
+        "$UCI_REAL" -c "$UCI_CASE/config" -t "$UCI_CASE/delta" "$action" "$@" || return $?
         [ "$action" != commit ] || printf '%s\n' "$1" >> "$UCI_CASE/commits"
         return 0
     fi
@@ -78,7 +78,7 @@ logger() { printf '%s\n' "$*" >> "$UCI_CASE/messages"; }
 hexdump() { printf 'fd12:3456:789a:'; }
 MOCK
 
-raw_uci() { "$UCI_REAL" -c "$UCI_CASE/config" -P "$UCI_CASE/delta" "$@"; }
+raw_uci() { "$UCI_REAL" -c "$UCI_CASE/config" -t "$UCI_CASE/delta" "$@"; }
 put() {
     if [ -n "$UCI_REAL" ]; then
         case "$1" in
@@ -98,7 +98,7 @@ get() {
 }
 committed() {
     if [ -n "$UCI_REAL" ]; then
-        "$UCI_REAL" -c "$UCI_CASE/config" -P "$UCI_CASE/clean-delta" -q get "$1" || true
+        "$UCI_REAL" -c "$UCI_CASE/config" -t "$UCI_CASE/clean-delta" -q get "$1" || true
     else cat "$UCI_CASE/committed/$1" 2>/dev/null || true
     fi
 }

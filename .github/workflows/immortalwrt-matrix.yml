@@ -63,6 +63,7 @@ jobs:
           sudo apt-get install -y build-essential cmake pkg-config libjson-c-dev
 
       - name: Build locked native UCI and ucode test tools
+        id: host-tools
         run: |
           python3 -B tools/build-host-test-tools.py \
             --lock source-inputs/source-lock.json \
@@ -73,6 +74,7 @@ jobs:
         run: sh tools/test-uci-integration.sh "${RUNNER_TEMP}/host-test-tools/bin/uci"
 
       - name: Apply and test converter patches
+        if: ${{ !cancelled() && steps.host-tools.outcome == 'success' }}
         run: |
           set -euo pipefail
           python3 -B tools/apply-build-patches.py "${RUNNER_TEMP}/locked-upstream" patches
