@@ -202,11 +202,12 @@ function Get-DiagnosticFindings([string] $SessionPath) {
         @{ id = 'out-of-memory'; severity = 'error'; title = 'Out-of-memory event reported'; pattern = 'Out of memory:|oom-kill:|invoked oom-killer|Killed process \d+'; advice = 'Review memory usage and the processes named in the full logs; a current memory snapshot may have recovered after the event.' },
         @{ id = 'storage-error'; severity = 'error'; title = 'Storage error reported'; pattern = '\bI/O error\b|UBIFS error|EXT4-fs error|JFFS2.*(?:error|corrupt)'; advice = 'Inspect the surrounding filesystem and flash messages before changing packages or configuration.' },
         @{ id = 'watchdog'; severity = 'warning'; title = 'Watchdog or stalled task reported'; pattern = 'NETDEV WATCHDOG|soft lockup|hard LOCKUP|blocked for more than|rcu[^\r\n]*stall'; advice = 'Correlate the event with load, driver messages, and the surrounding kernel trace.' },
-        @{ id = 'custom-defaults'; severity = 'error'; title = 'Custom defaults failure reported'; pattern = '99-custom.*(?:Expected a LAN bridge|No Wi-Fi radio found|No Wi-Fi AP interface found|WAN device .+ is missing|Legacy Zyxel WAN VLAN|Conflicting Zyxel eth1)'; advice = 'Review the generated LAN bridge, WAN device, and Wi-Fi sections. Network settings may already have been committed before a Wi-Fi failure.' },
+        @{ id = 'custom-defaults'; severity = 'error'; title = 'Custom defaults failure reported'; pattern = '99-custom.*(?:Expected a LAN bridge|No Wi-Fi radio found|No Wi-Fi AP interface found|Wi-Fi radio \d+ has no band|Wi-Fi interface \d+ has no mode|WAN device .+ is missing|Legacy Zyxel WAN VLAN|Conflicting Zyxel eth1)'; advice = 'Review the generated LAN bridge, WAN device, and Wi-Fi sections. Network settings may already have been committed before a Wi-Fi failure.' },
         @{ id = 'wifi-driver'; severity = 'warning'; title = 'Wi-Fi driver failure or timeout reported'; pattern = '(?:mt_wifi|mtwifi|mt76|mt798[16]|798[16]@|WiFi@|firmware)[^\r\n]*\b(?:timed out|timeout|assert(?:ion)?|crash(?:ed)?|failed)\b'; advice = 'Inspect surrounding driver messages and correlate with client interruptions; these patterns alone do not establish a cause.' },
         @{ id = 'offload'; severity = 'warning'; title = 'Wi-Fi offload probe failure reported'; pattern = 'warp_dev\d+.*probe.*failed|warp_probe\(\).*probe fail since warp is full'; advice = 'Inspect surrounding WARP firmware-ready messages and measure offload operation under load. A failed duplicate probe does not establish that all acceleration is unavailable.' },
         @{ id = 'dhcp'; severity = 'warning'; title = 'DHCP lease acquisition or pool problem reported'; pattern = 'udhcpc.*(?:no lease|lease failed)|dnsmasq.*no address range available'; advice = 'Check the affected interface, upstream DHCP availability, and configured address ranges.' },
-        @{ id = 'wan'; severity = 'warning'; title = 'WAN or PPP connection event reported'; pattern = 'netifd.*Interface .+ is now down|pppd.*(?:authentication failed|Connection terminated|timeout)'; advice = 'Check whether this was an expected startup/reconnect event and correlate with upstream connectivity.' },
+        @{ id = 'interface-down'; severity = 'info'; title = 'Network interface went down'; pattern = 'netifd.*Interface .+ is now down'; advice = 'Check the named interface and whether this was an expected configuration change or restart. This event alone does not identify a WAN failure.' },
+        @{ id = 'ppp'; severity = 'warning'; title = 'PPP connection event reported'; pattern = 'pppd.*(?:authentication failed|Connection terminated|timeout)'; advice = 'Check whether this was an expected startup/reconnect event and correlate with upstream connectivity.' },
         @{ id = 'radar'; severity = 'info'; title = 'Radar detection reported'; pattern = '\bradar (?:was )?detected\b|\bradar detection triggered\b'; advice = 'Correlate the detection with channel changes and client interruptions. Matching lines are not unique radar events.' },
         @{ id = 'dfs'; severity = 'info'; title = 'DFS CAC or channel transition reported'; pattern = '\bCAC\b.*\b(?:started|completed|finished|complete)\b|\bdfs_off_cac_end_update\b.*(?:zero-wait CAC end|Zero-wait CAC ch \d+ is available)|\bDfsDedicatedOutBandRDDStart\b.*Dedicated CAC time|\bDfsDedicatedInBandSetChannel\b.*InBand set to OutBand Channel|\bzero_wait_dfs_switch_ch\b.*OUTBAND_SWITCH'; advice = 'CAC and channel transitions can be normal. Correlate timestamps with interruptions; routine DFS activity is not a radar-detection or driver-failure diagnosis.' }
     )
@@ -287,9 +288,11 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $state = Get-DiagnosticCaptureState $SessionPath $Metadata
     if ($state -in @('not-started', 'no-logs')) { throw 'No diagnostic logs are available to analyze.' }
     $findings = @(Get-DiagnosticFindings $SessionPath)
+    $privacyNotice = 'Raw logs and findings are unsanitized and may contain Wi-Fi keys, WAN credentials, or other sensitive information. Review and redact all files before sharing.'
     $report = [ordered]@{
         schema_version = 1
         analyzed_at_utc = [DateTime]::UtcNow.ToString('o')
+        privacy_notice = $privacyNotice
         collection = $Metadata
         findings = $findings
     }
@@ -298,6 +301,8 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     $lines.Add('# OpenWrt diagnostic findings')
     $lines.Add('')
     $lines.Add('Pattern-based triage of a read-only snapshot. Findings are leads, not confirmed root causes. No matching patterns does not establish that the router is healthy. Log buffers may omit earlier events; logread and dmesg may contain the same event, so matched-line counts are not unique incident counts.')
+    $lines.Add('')
+    $lines.Add($privacyNotice)
     $lines.Add('')
     $lines.Add("SSH exit code: $($Metadata.transport.exit_code); timed out: $($Metadata.transport.timed_out).")
     if ($Metadata.host_key_checking) { $lines.Add("Host key checking: $($Metadata.host_key_checking).") }
@@ -340,11 +345,25 @@ function Write-DiagnosticReport([string] $SessionPath, $Metadata) {
     return $findings.Count
 }
 
+function Move-PreviousDiagnosticFindings([string] $SessionPath) {
+    $previous = @('findings.md', 'findings.json') | ForEach-Object { Join-Path $SessionPath $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    if (-not $previous) { return }
+    $archiveName = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $archivePath = Join-Path (Join-Path $SessionPath 'findings-archive') $archiveName
+    [System.IO.Directory]::CreateDirectory($archivePath) | Out-Null
+    foreach ($path in $previous) { Move-Item -LiteralPath $path -Destination $archivePath -ErrorAction Stop }
+    return $archivePath
+}
+
 function Complete-DiagnosticCapture([string] $SessionPath, $Metadata) {
     $state = Get-DiagnosticCaptureState $SessionPath $Metadata
     if ($state -in @('not-started', 'no-logs')) {
+        # Older collectors could produce findings even when collection failed.
+        # Preserve those reports without leaving them as the current findings.
+        $archivePath = Move-PreviousDiagnosticFindings $SessionPath
         $message = if ($state -eq 'not-started') { 'Collection failed: remote diagnostics never started.' } else { 'Collection failed: no usable system or kernel logs were retrieved.' }
         [Console]::Error.WriteLine("$message No findings were generated.")
+        if ($archivePath) { [Console]::Error.WriteLine("Previous findings archived: $archivePath") }
         if ($null -ne $Metadata.transport.exit_code) { [Console]::Error.WriteLine("SSH exit code: $($Metadata.transport.exit_code)") }
         if ($Metadata.transport.timed_out) { [Console]::Error.WriteLine('SSH session timed out.') }
         if ($Metadata.transport.error) { [Console]::Error.WriteLine($Metadata.transport.error) }

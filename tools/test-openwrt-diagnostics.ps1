@@ -40,7 +40,7 @@ $oom = $findings | Where-Object id -eq 'out-of-memory'
 Assert-True ($oom.matched_lines -eq 2) 'Both log sources should be analyzed.'
 Assert-True ($oom.evidence[0].file -eq 'logread.log' -and $oom.evidence[0].line -eq 2) 'Evidence line references are incorrect.'
 Assert-True (($findings | Where-Object id -eq 'dfs').severity -eq 'info') 'Normal DFS activity must not be treated as a failure.'
-Assert-True (-not ($findings | Where-Object id -eq 'wan')) 'WAN coming up must not be treated as a failure.'
+Assert-True (-not ($findings | Where-Object { $_.id -in @('interface-down', 'ppp') })) 'WAN coming up must not be treated as a down or PPP event.'
 
 # Routine function names and crash-buffer setup must not become incident findings.
 $ruleRoot = Join-Path $testRoot 'rule-regressions'
@@ -59,7 +59,11 @@ Assert-True (@(Get-DiagnosticFindings $ruleRoot).Count -eq 0) 'Routine ramoops/D
     'kernel: DfsOutBandCacCountUpdate() 7609: OutBand CAC complete and is available now.',
     'kernel: dfs_off_cac_end_update() 3751: Zero-wait CAC ch 64 is available, bandidx 1',
     'kernel: radar detected on channel 104',
-    "99-custom: WAN device 'eth1' is missing or is a bridge; review VLAN/device mapping before applying defaults"
+    "daemon.notice netifd: Interface 'guest' is now down",
+    'daemon.err pppd: authentication failed',
+    "99-custom: WAN device 'eth1' is missing or is a bridge; review VLAN/device mapping before applying defaults",
+    '99-custom: Wi-Fi radio 1 has no band; defaults were not applied',
+    '99-custom: Wi-Fi interface 1 has no mode; defaults were not applied'
 ) | Set-Content -LiteralPath (Join-Path $ruleRoot 'logread.log')
 $ruleFindings = @(Get-DiagnosticFindings $ruleRoot)
 Assert-True (($ruleFindings | Where-Object id -eq 'kernel-fault').matched_lines -eq 2) 'Real Oops and panic messages must still be detected.'
@@ -67,15 +71,19 @@ Assert-True (($ruleFindings | Where-Object id -eq 'dfs').matched_lines -eq 2) 'A
 Assert-True (($ruleFindings | Where-Object id -eq 'radar').matched_lines -eq 1) 'Radar detection must be separated from routine DFS processing.'
 Assert-True (($ruleFindings | Where-Object id -eq 'wifi-driver').matched_lines -eq 1) 'MediaTek numeric driver prefixes must be recognized.'
 Assert-True (($ruleFindings | Where-Object id -eq 'offload').matched_lines -eq 1) 'WED probe failures must be surfaced without declaring all acceleration broken.'
-Assert-True (($ruleFindings | Where-Object id -eq 'custom-defaults').matched_lines -eq 1) 'Missing WAN-device errors must be detected.'
+Assert-True (($ruleFindings | Where-Object id -eq 'custom-defaults').matched_lines -eq 3) 'WAN-device and Wi-Fi preflight errors must be detected.'
+Assert-True (($ruleFindings | Where-Object id -eq 'interface-down').matched_lines -eq 1 -and ($ruleFindings | Where-Object id -eq 'interface-down').severity -eq 'info') 'A guest interface going down must be informational and must not be called a WAN failure.'
+Assert-True (($ruleFindings | Where-Object id -eq 'ppp').matched_lines -eq 1 -and ($ruleFindings | Where-Object id -eq 'ppp').severity -eq 'warning') 'PPP authentication failures must remain warnings separate from interface state changes.'
 
 $metadata = [ordered]@{ schema_version = 1; transport = @{ exit_code = 0; timed_out = $false; error = $null }; sections = $sections }
 $metadata | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $testRoot 'collection.json')
 $null = Write-DiagnosticReport $testRoot $metadata
 $report = Get-Content -LiteralPath (Join-Path $testRoot 'findings.md') -Raw
 Assert-True ($report.Contains('Collection is incomplete')) 'A failed section must be visible in the report.'
+Assert-True ($report.Contains('unsanitized') -and $report.Contains('credentials')) 'Markdown findings must explain that raw logs and findings may contain credentials.'
 $json = Get-Content -LiteralPath (Join-Path $testRoot 'findings.json') -Raw | ConvertFrom-Json
 Assert-True ($json.findings.Count -eq 4) 'Machine-readable report is missing findings.'
+Assert-True ($json.privacy_notice.Contains('unsanitized') -and $json.privacy_notice.Contains('credentials')) 'JSON findings must include the privacy notice.'
 
 # Give actionable first-connection guidance, while treating changed keys separately.
 $unknownKeyError = 'No ED25519 host key is known for 10.0.0.9 and you have requested strict checking.' + "`nHost key verification failed."
@@ -225,6 +233,57 @@ $noLogsMetadata = @{ transport = @{ exit_code = 0; timed_out = $false; error = $
     @{ name = 'board'; status = 'captured'; exit_code = 0 }
 ) }
 Assert-True ((Get-DiagnosticCaptureState $failedDir.FullName $noLogsMetadata) -eq 'no-logs') 'Missing log buffers must prevent analysis.'
+
+# Reanalyzing unusable captures must archive old reports without altering raw
+# evidence. Exercise the CLI for both failure states and legacy transport arrays.
+$archiveCases = @(
+    @{ name = 'not-started'; transport = $failedMetadata.transport; sections = $failedMetadata.sections; message = 'remote diagnostics never started' },
+    @{ name = 'no-logs'; transport = $noLogsMetadata.transport; sections = $noLogsMetadata.sections; message = 'no usable system or kernel logs were retrieved' },
+    @{ name = 'legacy-not-started'; transport = @([pscustomobject]@{}, [pscustomobject]@{}, $failedMetadata.transport); sections = $failedMetadata.sections; message = 'remote diagnostics never started' }
+)
+foreach ($case in $archiveCases) {
+    $archiveRoot = Join-Path $testRoot ('archive-' + $case.name)
+    [System.IO.Directory]::CreateDirectory($archiveRoot) | Out-Null
+    $caseMetadata = @{ schema_version = 1; transport = $case.transport; sections = $case.sections }
+    $caseMetadata | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $archiveRoot 'collection.json') -Encoding utf8
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'ssh-output.log'), 'Original transport output')
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'ssh-stderr.log'), 'Original transport error')
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'logread.log'), 'logread: not found')
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'board.log'), 'Original board snapshot')
+    $originalMarkdown = 'Obsolete findings from an earlier collector'
+    $originalJson = '{"schema_version":1,"findings":[]}'
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'findings.md'), $originalMarkdown)
+    [System.IO.File]::WriteAllText((Join-Path $archiveRoot 'findings.json'), $originalJson)
+    $rawHashes = @{}
+    foreach ($name in @('collection.json', 'ssh-output.log', 'ssh-stderr.log', 'logread.log', 'board.log')) {
+        $rawHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $archiveRoot $name)).Hash
+    }
+    $analysisInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $analysisInfo.FileName = $pwsh
+    $analysisInfo.UseShellExecute = $false
+    $analysisInfo.RedirectStandardInput = $true
+    $analysisInfo.RedirectStandardOutput = $true
+    $analysisInfo.RedirectStandardError = $true
+    foreach ($argument in @('-NoProfile', '-NonInteractive', '-File', $collector, '-AnalyzePath', $archiveRoot)) { $analysisInfo.ArgumentList.Add($argument) }
+    $invocationRoot = Join-Path $archiveRoot 'invocation'
+    [System.IO.Directory]::CreateDirectory($invocationRoot) | Out-Null
+    $analysisResult = Invoke-SshCapture $analysisInfo '' $invocationRoot 15
+    $analysisError = [System.IO.File]::ReadAllText((Join-Path $invocationRoot 'ssh-stderr.log'))
+    $analysisOutput = [System.IO.File]::ReadAllText((Join-Path $invocationRoot 'ssh-output.log'))
+    Assert-True ($analysisResult.exit_code -eq 2 -and $analysisError.Contains($case.message)) "$($case.name): unusable reanalysis must retain its failure status."
+    Assert-True ($analysisOutput -notmatch '(?m)^(?:Capture|Partial capture|Findings):') "$($case.name): unusable reanalysis must not announce current findings."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $archiveRoot 'findings.md')) -and -not (Test-Path -LiteralPath (Join-Path $archiveRoot 'findings.json'))) "$($case.name): obsolete reports must not remain as current findings."
+    $archives = @(Get-ChildItem -LiteralPath (Join-Path $archiveRoot 'findings-archive') -Directory)
+    Assert-True ($archives.Count -eq 1 -and $analysisError.Contains("Previous findings archived: $($archives[0].FullName)")) "$($case.name): the CLI must identify the preserved reports' archive."
+    Assert-True ([System.IO.File]::ReadAllText((Join-Path $archives[0].FullName 'findings.md')) -eq $originalMarkdown) "$($case.name): old Markdown findings must be preserved."
+    Assert-True ([System.IO.File]::ReadAllText((Join-Path $archives[0].FullName 'findings.json')) -eq $originalJson) "$($case.name): old JSON findings must be preserved."
+    foreach ($name in $rawHashes.Keys) {
+        Assert-True ((Get-FileHash -LiteralPath (Join-Path $archiveRoot $name)).Hash -eq $rawHashes[$name]) "$($case.name): archival must not alter $name."
+    }
+    $analysisResult = Invoke-SshCapture $analysisInfo '' $invocationRoot 15
+    Assert-True ($analysisResult.exit_code -eq 2 -and @(Get-ChildItem -LiteralPath (Join-Path $archiveRoot 'findings-archive') -Directory).Count -eq 1) "$($case.name): repeating unusable reanalysis must not create another archive."
+    Assert-True (-not [System.IO.File]::ReadAllText((Join-Path $invocationRoot 'ssh-stderr.log')).Contains('Previous findings archived:')) "$($case.name): repeating reanalysis must not claim it archived another report."
+}
 Write-Host "All diagnostic tests passed. Ignored fixtures: $([System.IO.Path]::GetFullPath($testRoot))"
 
 # Expected CLI failures leave LASTEXITCODE nonzero. GitHub Actions propagates

@@ -25,8 +25,12 @@ jobs:
     outputs:
       config_dir: ${{ steps.find-config-dir.outputs.config_dir }}
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+      upstream_sha: ${{ steps.resolve-sources.outputs.upstream_sha }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Test source locking without network access
+        run: python3 -B tools/test-lock-build-sources.py
 
       - name: Test first-boot defaults
         run: sh tools/test-uci-defaults.sh
@@ -34,6 +38,46 @@ jobs:
       - name: Test diagnostic tooling
         shell: pwsh
         run: ./tools/test-openwrt-diagnostics.ps1
+
+      - name: Resolve shared upstream and feed revisions
+        id: resolve-sources
+        run: |
+          set -euo pipefail
+          source_sha="$(python3 -B tools/lock-build-sources.py \
+            --repository "${REPO_URL}" --ref "refs/heads/${BRANCH}" \
+            --checkout-dir "${RUNNER_TEMP}/locked-upstream" \
+            --output-dir source-inputs)"
+          echo "upstream_sha=${source_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve source lock
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-inputs
+          path: source-inputs/
+          overwrite: true
+          if-no-files-found: error
+
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libjson-c-dev
+
+      - name: Build locked native UCI and ucode test tools
+        run: |
+          python3 -B tools/build-host-test-tools.py \
+            --lock source-inputs/source-lock.json \
+            --work-dir "${RUNNER_TEMP}/host-test-build" \
+            --prefix "${RUNNER_TEMP}/host-test-tools"
+
+      - name: Test defaults with real UCI
+        run: sh tools/test-uci-integration.sh "${RUNNER_TEMP}/host-test-tools/bin/uci"
+
+      - name: Apply and test converter patches
+        run: |
+          set -euo pipefail
+          python3 -B tools/apply-build-patches.py "${RUNNER_TEMP}/locked-upstream" patches
+          sh tools/test-mtwifi-converter.sh \
+            "${RUNNER_TEMP}/locked-upstream" "${RUNNER_TEMP}/host-test-tools/bin/ucode"
 
       - name: Detect config directory
         id: find-config-dir
@@ -97,6 +141,7 @@ jobs:
     env:
       # ---- LOCAL CUSTOMIZATION INPUTS ----
       CONFIG_DIR: "${{ needs.discover-configs.outputs.config_dir }}"
+      UPSTREAM_SHA: "${{ needs.discover-configs.outputs.upstream_sha }}"
 
       # ---- TARGET / PROFILE ----
       OWRT_TARGET: "mediatek"
@@ -118,6 +163,12 @@ jobs:
 
       - uses: actions/checkout@v5
 
+      - name: Download shared source lock
+        uses: actions/download-artifact@v7
+        with:
+          name: source-inputs
+          path: source-inputs
+
       - name: Free disk (GitHub runners are tiny)
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
@@ -135,10 +186,11 @@ jobs:
 
       - name: Fetch ImmortalWrt
         run: |
-          git -c advice.detachedHead=false clone \
-            --single-branch --branch "${BRANCH}" \
-            --depth 1 --filter=blob:none \
-            "${REPO_URL}" "${WORKDIR}"
+          set -euo pipefail
+          git init "${WORKDIR}"
+          git -C "${WORKDIR}" remote add origin "${REPO_URL}"
+          git -C "${WORKDIR}" fetch --depth 1 --filter=blob:none origin "${UPSTREAM_SHA}"
+          git -C "${WORKDIR}" -c advice.detachedHead=false checkout --detach "${UPSTREAM_SHA}"
 
       # ------------------- CACHES --------------------
 
@@ -162,77 +214,20 @@ jobs:
         run: |
           set -euo pipefail
           cd "${WORKDIR}"
-          cp feeds.conf.default feeds.conf
+          cp "${GITHUB_WORKSPACE}/source-inputs/feeds.conf" feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          python3 -B "${GITHUB_WORKSPACE}/tools/lock-build-sources.py" \
+            --verify-checkout "${WORKDIR}" --lock "${GITHUB_WORKSPACE}/source-inputs/source-lock.json"
 
       # ---------------- PATCHES ----------------------
 
       - name: Apply all patches from repo patches/
         run: |
-          set -eu
-          cd "${WORKDIR}"
-          PATCH_ROOT="${GITHUB_WORKSPACE}/patches"
-          if [ ! -d "${PATCH_ROOT}" ]; then
-            echo "No patches directory; skipping."
-            exit 0
-          fi
-
-          git config user.email "ci@localhost"
-          git config user.name  "CI"
-
-          # Gather patches deterministically
-          mapfile -t PATCHES < <(find -L "${PATCH_ROOT}" -type f \( -iname '*.patch' -o -iname '*.diff' \) | sort)
-          if [ "${#PATCHES[@]}" -eq 0 ]; then
-            echo "No patch files found under ${PATCH_ROOT}; skipping."
-            exit 0
-          fi
-
-          echo "Found ${#PATCHES[@]} patch(es). Applying now:"
-          for p in "${PATCHES[@]}"; do
-            echo " -> $(realpath --relative-to="${PATCH_ROOT}" "$p")"
-            # Convert UTF-16 patches saved by Windows editors, then normalize
-            # CRLF and drop a UTF-8 BOM if an editor added one.
-            case "$(head -c 2 "$p" | od -An -tx1 | tr -d ' \n')" in
-              fffe)
-                iconv -f UTF-16LE -t UTF-8 "$p" > "$p.utf8"
-                mv "$p.utf8" "$p"
-                ;;
-              feff)
-                iconv -f UTF-16BE -t UTF-8 "$p" > "$p.utf8"
-                mv "$p.utf8" "$p"
-                ;;
-            esac
-            sed -i '1s/^\xEF\xBB\xBF//;s/\r$//' "$p"
-
-            # git am only accepts mailbox/format-patch input. Plain diff --git
-            # patches should go straight to git apply, otherwise git am emits
-            # "Patch format detection failed" before the real apply attempt.
-            if head -n 1 "$p" | grep -Eq '^From [0-9a-f]{40} '; then
-              if git am --keep-cr --3way --whitespace=fix "$p"; then
-                continue
-              fi
-              git am --abort || true
-            fi
-
-            # Fallback to git apply with varying strip levels. Prefer -p1 for
-            # git diffs containing a/ and b/ prefixes.
-            applied=0
-            for STRIP in 1 0 2; do
-              if git apply --check --whitespace=fix -p${STRIP} "$p"; then
-                git apply --whitespace=fix -p${STRIP} "$p"
-                git add -A
-                git commit -m "Apply $(basename "$p") via git apply -p${STRIP}"
-                applied=1
-                break
-              fi
-            done
-
-            if [ $applied -eq 0 ]; then
-              echo "ERROR: Failed to apply patch: $p"
-              exit 1
-            fi
-          done
+          set -euo pipefail
+          git -C "${WORKDIR}" config user.email "ci@localhost"
+          git -C "${WORKDIR}" config user.name "CI"
+          python3 -B tools/apply-build-patches.py "${WORKDIR}" patches --commit
 
       # --------------- FIRST-BOOT DEFAULTS ----------
 
@@ -322,8 +317,6 @@ jobs:
       # ---------------- BUILD ------------------------
 
       - name: Build firmware
-        env:
-          MAKEFLAGS: "-j$(nproc)"
         run: |
           set -euo pipefail
           cd "${WORKDIR}"
@@ -365,6 +358,8 @@ jobs:
           if [ -f "${WORKDIR}/build.log" ]; then
             cp -v "${WORKDIR}/build.log" "$OUT/"
           fi
+          cp -v "${GITHUB_WORKSPACE}/source-inputs/source-lock.json" "$OUT/"
+          cp -v "${GITHUB_WORKSPACE}/source-inputs/feeds.conf" "$OUT/feeds.conf.lock"
 
           for img in "${SYSUP[@]}"; do
             dir="$(dirname "$img")"
@@ -374,7 +369,7 @@ jobs:
             cp -v "$img" "$OUT/"
 
             # Copy metadata files if present (from the same folder as sysupgrade)
-            for f in sha256sums profiles.json config.buildinfo version.buildinfo; do
+            for f in sha256sums profiles.json config.buildinfo version.buildinfo feeds.buildinfo; do
               if [ -f "$dir/$f" ]; then
                 cp -v "$dir/$f" "$OUT/"
               fi
@@ -389,7 +384,23 @@ jobs:
         with:
           name: firmware-${{ env.PROFILE }}-${{ env.IMAGE_VARIANT }}-${{ env.LAN_IP }}-${{ env.BUILD_DATE }}
           path: minimal-artifacts/
+          overwrite: true
           if-no-files-found: error
+
+      - name: Upload failed-build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-diagnostics-${{ env.PROFILE }}-${{ env.IMAGE_VARIANT }}-${{ env.LAN_IP }}
+          path: |
+            ${{ env.WORKDIR }}/build.log
+            ${{ env.WORKDIR }}/.config
+            ${{ env.WORKDIR }}/bin/targets/${{ env.OWRT_TARGET }}/${{ env.OWRT_SUBTARGET }}/*.buildinfo
+            source-inputs/source-lock.json
+            source-inputs/feeds.conf
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: warn
 
   draft-release:
     needs:
@@ -399,6 +410,12 @@ jobs:
       actions: read
       contents: write
     steps:
+      - name: Download shared source lock
+        uses: actions/download-artifact@v7
+        with:
+          name: source-inputs
+          path: source-inputs
+
       - name: Set release metadata
         id: release-meta
         shell: bash
@@ -409,6 +426,7 @@ jobs:
           short_sha="${GITHUB_SHA::7}"
           tag="build-${build_date}-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
           title="ImmortalWrt build ${build_date}.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT} (${short_sha})"
+          upstream_sha="$(python3 -c 'import json; print(json.load(open("source-inputs/source-lock.json"))["upstream"]["commit"])')"
 
           {
             echo "tag=${tag}"
@@ -422,7 +440,8 @@ jobs:
           - Source ref: ${GITHUB_REF_NAME}
           - Commit: ${GITHUB_SHA}
           - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - Upstream source: ${REPO_URL}@${BRANCH}
+          - Upstream source: ${REPO_URL}@${upstream_sha} (branch ${BRANCH})
+          - Source lock and exact feed revisions are included in each firmware archive.
 
           Each device has four variants (all /24 networks):
 
